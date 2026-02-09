@@ -81,9 +81,9 @@ class AppConfig(BaseModel):
 
 def load_config(env_file: str | None = ".env") -> AppConfig:
     if env_file:
-        # In local/dev usage we want project .env values to win over any stale
-        # process-level variables (common on Windows shells).
-        load_dotenv(env_file, override=True)
+        # Load .env values but let shell environment variables win
+        # (important for scripts that set SMTP_* before calling the CLI)
+        load_dotenv(env_file, override=False)
     return AppConfig(
         openai_api_key=_getenv_opt("OPENAI_API_KEY"),
         analysis_model=_getenv_str("ANALYSIS_MODEL", "gpt-4o-mini"),

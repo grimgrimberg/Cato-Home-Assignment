@@ -1,5 +1,5 @@
 symbols:
-  # ── US Large-Cap / Active (20) ──
+  # ── US Large-Cap / Most Active (20) ──
   - AAPL
   - MSFT
   - NVDA
@@ -45,7 +45,7 @@ symbols:
   - GSK.L
   - DGE.L
 
-  # ── Europe (Euronext / Xetra / SIX) (10) ──
+  # ── Europe (Paris / Amsterdam / Frankfurt) (10) ──
   - ASML.AS
   - SAN.PA
   - AIR.PA
@@ -54,21 +54,17 @@ symbols:
   - TTE.PA
   - SAP.DE
   - SIE.DE
-  - NESN.SW
-  - NOVN.SW
+  - BMW.DE
+  - BAS.DE
 
-  # ── Canada / TSX (5) ──
-  - SHOP.TO
-  - TD.TO
-  - RY.TO
-  - ENB.TO
-  - CNQ.TO
-
-  # ── Japan / TSE (3) ──
-  - 7203.T
-  - 6758.T
-  - 9984.T
-
-  # ── Hong Kong (2) ──
-  - 0700.HK
-  - 9988.HK
+  # ── Crypto (10) ──
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - DOGE-USD
+  - BNB-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+  - DOT-USD

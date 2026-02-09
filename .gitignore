@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .cache/
 .env
+credentials.csv
 runs/
 *.xlsx
 *.eml

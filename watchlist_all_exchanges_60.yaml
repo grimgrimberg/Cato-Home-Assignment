@@ -1,0 +1,74 @@
+symbols:
+  # ── US Large-Cap / Active (20) ──
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - TSLA
+  - META
+  - GOOGL
+  - AMD
+  - PLTR
+  - INTC
+  - JPM
+  - V
+  - MA
+  - BRK-B
+  - UNH
+  - XOM
+  - AVGO
+  - COST
+  - NFLX
+  - KO
+
+  # ── Israel / TASE (10) ──
+  - TEVA.TA
+  - NICE.TA
+  - ICL.TA
+  - DSCT.TA
+  - LUMI.TA
+  - BEZQ.TA
+  - FIBI.TA
+  - PHOE.TA
+  - MZTF.TA
+  - ELAL.TA
+
+  # ── UK / London (10) ──
+  - BP.L
+  - HSBA.L
+  - VOD.L
+  - BARC.L
+  - AZN.L
+  - SHEL.L
+  - ULVR.L
+  - RIO.L
+  - GSK.L
+  - DGE.L
+
+  # ── Europe (Euronext / Xetra / SIX) (10) ──
+  - ASML.AS
+  - SAN.PA
+  - AIR.PA
+  - OR.PA
+  - MC.PA
+  - TTE.PA
+  - SAP.DE
+  - SIE.DE
+  - NESN.SW
+  - NOVN.SW
+
+  # ── Canada / TSX (5) ──
+  - SHOP.TO
+  - TD.TO
+  - RY.TO
+  - ENB.TO
+  - CNQ.TO
+
+  # ── Japan / TSE (3) ──
+  - 7203.T
+  - 6758.T
+  - 9984.T
+
+  # ── Hong Kong (2) ──
+  - 0700.HK
+  - 9988.HK

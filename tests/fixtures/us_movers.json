@@ -1,0 +1,30 @@
+{
+  "finance": {
+    "result": [
+      {
+        "quotes": [
+          {
+            "symbol": "AAPL",
+            "shortName": "Apple Inc.",
+            "regularMarketPrice": {"raw": 278.12},
+            "regularMarketChange": {"raw": 2.21},
+            "regularMarketChangePercent": {"raw": 0.80},
+            "regularMarketVolume": {"raw": 50420700},
+            "currency": "USD",
+            "exchange": "NMS"
+          },
+          {
+            "symbol": "TEVA.TA",
+            "shortName": "Teva",
+            "regularMarketPrice": {"raw": 10820.0},
+            "regularMarketChange": {"raw": 140.0},
+            "regularMarketChangePercent": {"raw": 1.31},
+            "regularMarketVolume": {"raw": 4450021},
+            "currency": "ILA",
+            "exchange": "TLV"
+          }
+        ]
+      }
+    ]
+  }
+}

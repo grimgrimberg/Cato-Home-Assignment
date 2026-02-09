@@ -1,0 +1,111 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Daily Movers: Watchlist (All Exchanges 60)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "daily_movers",
+            "args": [
+                "run",
+                "--date",
+                "2026-02-08",
+                "--mode",
+                "watchlist",
+                "--watchlist",
+                "watchlist_all_exchanges_60.yaml",
+                "--top",
+                "60",
+                "--out",
+                "runs/debug-all-exchanges-top60",
+                "--no-open"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "MAX_WORKERS": "2",
+                "OPENAI_TIMEOUT_SECONDS": "60",
+                "REQUEST_TIMEOUT_SECONDS": "30",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            "name": "Daily Movers: Movers US (Most-Active Top 5 FAST)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "daily_movers",
+            "args": [
+                "run",
+                "--date",
+                "2026-02-09",
+                "--mode",
+                "movers",
+                "--source",
+                "most-active",
+                "--region",
+                "us",
+                "--top",
+                "5",
+                "--out",
+                "runs/debug-most-active-us-top5",
+                "--no-open"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "MAX_WORKERS": "1",
+                "OPENAI_TIMEOUT_SECONDS": "60",
+                "REQUEST_TIMEOUT_SECONDS": "30",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            "name": "Daily Movers: Movers US (Most-Active Top 20)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "daily_movers",
+            "args": [
+                "run",
+                "--date",
+                "2026-02-08",
+                "--mode",
+                "movers",
+                "--source",
+                "most-active",
+                "--region",
+                "us",
+                "--top",
+                "20",
+                "--out",
+                "runs/debug-most-active-us-top20",
+                "--no-open"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "MAX_WORKERS": "2",
+                "OPENAI_TIMEOUT_SECONDS": "60",
+                "REQUEST_TIMEOUT_SECONDS": "30",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            "name": "Daily Movers: UiPath Adapter (Smoke)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/uipath_smoke.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "MAX_WORKERS": "2",
+                "OPENAI_TIMEOUT_SECONDS": "60",
+                "REQUEST_TIMEOUT_SECONDS": "30",
+                "PYTHONUTF8": "1"
+            }
+        }
+    ]
+}

@@ -1,0 +1,14 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "high"
+model_verbosity = "high"
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+
+[mcp_servers.playwright]
+url = "http://localhost:8931/mcp"
+enabled = false
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+enabled = false

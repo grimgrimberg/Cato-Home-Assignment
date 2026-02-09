@@ -1,0 +1,61 @@
+{
+  "ticker": {
+    "ticker": "AAPL",
+    "name": "Apple Inc.",
+    "price": 278.12,
+    "abs_change": 2.21,
+    "pct_change": 0.8,
+    "volume": 50420700,
+    "currency": "USD",
+    "exchange": "NMS",
+    "market": "us",
+    "ingestion_source": "yahoo_screener_json",
+    "ingestion_fallback_used": false,
+    "errors": []
+  },
+  "enrichment": {
+    "sector": "Technology",
+    "industry": "Consumer Electronics",
+    "earnings_date": "Apr 30, 2026",
+    "headlines": [
+      {
+        "title": "Apple supplier updates demand outlook",
+        "url": "https://example.com/apple-1",
+        "published_at": "2026-02-08T04:50:00+00:00"
+      }
+    ],
+    "price_series": [270.0, 272.0, 276.0, 278.12],
+    "errors": []
+  },
+  "analysis": {
+    "why_it_moved": "AAPL moved +0.80% while coverage highlighted Apple supplier updates demand outlook. Volume near 50.42M supports a watch stance at 0.78 confidence.",
+    "sentiment": 0.07,
+    "action": "WATCH",
+    "confidence": 0.78,
+    "decision_trace": {
+      "evidence_used": [
+        {
+          "title": "Apple supplier updates demand outlook",
+          "url": "https://example.com/apple-1",
+          "published_at": "2026-02-08T04:50:00+00:00"
+        }
+      ],
+      "numeric_signals_used": {
+        "price": 278.12,
+        "pct_change": 0.8,
+        "volume": 50420700
+      },
+      "rules_triggered": ["elevated_volume"],
+      "explainability_summary": "AAPL is tagged WATCH from +0.80% movement with 1 triggered rules under a headline-supported context."
+    },
+    "provenance_urls": [
+      "https://example.com/apple-1",
+      "https://finance.yahoo.com/quote/AAPL"
+    ],
+    "model_used": "heuristics",
+    "errors": []
+  },
+  "needs_review": false,
+  "needs_review_reason": [],
+  "status": "ok"
+}

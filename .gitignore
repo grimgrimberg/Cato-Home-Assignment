@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.cache/
+.env
+runs/
+*.xlsx
+*.eml
+.DS_Store
+
+.venv/

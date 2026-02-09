@@ -1,0 +1,44 @@
+symbols:
+  # ── US Large-Cap (10) ──
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - TSLA
+  - META
+  - GOOGL
+  - AMD
+  - PLTR
+  - INTC
+
+  # ── TASE / Israel (6) ──
+  - TEVA.TA
+  - NICE.TA
+  - ICL.TA
+  - DSCT.TA
+  - POLI.TA
+  - LUMI.TA
+
+  # ── UK / London (6) ──
+  - BP.L
+  - HSBA.L
+  - VOD.L
+  - BARC.L
+  - AZN.L
+  - SHEL.L
+
+  # ── EU (Paris / Amsterdam / Frankfurt) (6) ──
+  - ASML.AS
+  - SAN.PA
+  - BMW.DE
+  - SIE.DE
+  - AIR.PA
+  - OR.PA
+
+  # ── Crypto (6) ──
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - DOGE-USD
+  - BNB-USD

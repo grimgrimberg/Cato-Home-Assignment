@@ -1,10 +1,121 @@
 # Daily Movers Assistant
 
-Daily Movers Assistant is a Python market digest pipeline powered by a **LangGraph agentic analysis engine**, deterministic data ingestion, explainable AI synthesis, strong failure handling, and demo-quality HTML + Excel reports.
+A Python market-digest pipeline that ingests Yahoo Finance data, enriches tickers with evidence, synthesizes explainable recommendations via a **LangGraph agentic engine** (with deterministic fallbacks), and produces demo-quality HTML + Excel + Email reports.
+
+---
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [What the Project Does](#what-the-project-does)
+- [Architecture Diagram](#architecture-diagram)
+- [Agentic Architecture (LangGraph)](#agentic-architecture-langgraph)
+- [Modes: movers vs watchlist](#modes-movers-vs-watchlist)
+- [Ingestion Details (Yahoo)](#ingestion-details-yahoo-and---source)
+- [Watchlist File Format](#watchlist-file-format-yamljson)
+- [Enrichment](#enrichment-best-effort)
+- [Analysis Architecture](#analysis-architecture)
+- [HITL Review Rules](#hitl-human-in-the-loop-review-rules)
+- [Output Artifacts](#output-artifacts-per-run-folder)
+- [Email & SMTP Setup](#email--smtp-setup)
+- [Configuration & Environment Variables](#configuration--environment-variables)
+- [CLI Reference](#cli-reference-every-flag)
+- [UiPath Integration](#uipath-integration-function-call-adapter)
+- [Testing](#testing--hardening)
+- [Debugging & Troubleshooting](#debugging--troubleshooting)
+- [High-Value Notes](#high-value-notes-stuff-people-usually-miss)
+- [Project Layout](#project-layout)
+
+---
+
+## Quick Start
+
+### Install
+
+```powershell
+py -3 -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
+### Run (opens digest.html automatically)
+
+```powershell
+py -3 -m daily_movers run --mode movers --region us --top 5 --out runs/quick-test
+```
+
+### Run tests
+
+```powershell
+py -3 -m pytest -q
+```
+
+### Convenience runner (Windows)
+
+```powershell
+.\scripts\tasks.ps1 help
+.\scripts\tasks.ps1 install
+.\scripts\tasks.ps1 test
+.\scripts\tasks.ps1 run-movers -Date 2026-02-09 -Top 20 -Region us -Out runs/2026-02-09
+```
+
+---
+
+## What the Project Does
+
+Each run follows five stages:
+
+1. **Ingest** a list of tickers (from Yahoo "Most Active" screener, a curated universe, or a user watchlist)
+2. **Enrich** each ticker with best-effort evidence (headlines, sector/industry, price series)
+3. **Analyze** each ticker (LangGraph agent → raw OpenAI fallback → deterministic heuristics)
+4. **Review** — apply HITL rules to flag items requiring manual attention
+5. **Render** — produce `digest.html`, `report.xlsx`, `digest.eml`, `archive.jsonl`, `run.json`, `run.log`
+
+The pipeline is resilient: per-ticker failures don't crash the run, and every error is recorded.
+
+---
+
+## Architecture Diagram
+
+```
+┌──────────────────────────────────────────────────────┐
+│  CLI / UiPath Adapter                                │
+│  ▼                                                   │
+│  run_daily_movers(request, config)                   │
+└──────────────────────────────────────────────────────┘
+                         ▼
+        ┌────────────────────────────────┐
+        │  INGESTION                     │
+        │  ├─ movers: Yahoo screener     │
+        │  │   (JSON primary → HTML      │
+        │  │    fallback)                │
+        │  └─ watchlist: Chart API       │
+        └────────────────────────────────┘
+                         ▼
+        ┌────────────────────────────────┐
+        │  PER-TICKER (parallel)         │
+        │  ├─ Enrich (headlines, sector, │
+        │  │         price series)       │
+        │  ├─ Analyze (LangGraph agent   │
+        │  │   → OpenAI → heuristics)    │
+        │  └─ HITL Review                │
+        └────────────────────────────────┘
+                         ▼
+        ┌────────────────────────────────┐
+        │  RENDERING & OUTPUT            │
+        │  ├─ digest.html (auto-opens)   │
+        │  ├─ report.xlsx                │
+        │  ├─ digest.eml (always)        │
+        │  ├─ SMTP send (if configured)  │
+        │  ├─ archive.jsonl              │
+        │  ├─ run.json                   │
+        │  └─ run.log                    │
+        └────────────────────────────────┘
+```
+
+---
 
 ## Agentic Architecture (LangGraph)
 
-The core analysis uses a **LangGraph StateGraph** with four specialised nodes connected by conditional edges:
+The core analysis uses a **LangGraph StateGraph** with four specialised nodes:
 
 ```
 ┌────────────┐     ┌──────────┐     ┌─────────┐     ┌─────────────┐
@@ -21,395 +132,64 @@ The core analysis uses a **LangGraph StateGraph** with four specialised nodes co
 | **Critic** | Guard-rails: CoT removal, confidence clipping, 2-sentence enforcement, provenance assembly |
 | **Recommender** | Assigns portfolio tags: `top_pick_candidate`, `most_potential_candidate`, `contrarian_bounce`, `momentum_signal` |
 
-The pipeline uses a 3-tier fallback strategy:
-1. **LangGraph agent** (primary) – uses `langchain-openai` `ChatOpenAI`
-2. **Raw OpenAI** (secondary) – direct Responses API via `requests`
-3. **Deterministic heuristics** (always available) – rule-based, no API key needed
+**3-tier fallback strategy:**
 
-## Features
-- **LangGraph StateGraph** with conditional edges and typed state (`AgentState`)
-- **LangChain integration** via `langchain-openai` for LLM calls
-- Movers mode (US screener + hybrid non-US universes)
-- Watchlist mode across **US, TASE (.TA), UK (.L), EU (.PA/.DE/.AS), and Crypto (-USD)**
-- Enrichment: headlines, earnings date, sector/industry (best effort)
-- Analysis with decision trace, confidence, HITL flags, and **recommendation tags**
-- **Top Pick** and **Most Potential** highlight cards in HTML digest
-- **Market badges** showing breakdown across US, TASE, UK, EU, Crypto
-- Outputs: Excel (with Highlights sheet), HTML digest, JSONL archive, run metadata, structured logs, EML
-- Pluggable email backends (`eml` default + optional `smtp`)
-- UiPath migration adapter (`daily_movers.adapters.uipath`)
-- Auto-open `digest.html` in your default browser after each run (`--no-open` to disable)
+1. **LangGraph agent** (primary) — uses `langchain-openai` `ChatOpenAI`
+2. **Raw OpenAI** (secondary) — direct Responses API via `requests`
+3. **Deterministic heuristics** (always available) — rule-based, no API key needed
 
-## Install
-```bash
-# Daily Movers Assistant
-
-Daily Movers Assistant is a **Python market-digest pipeline** that:
-
-1) chooses a set of tickers (either from Yahoo “Most Active” or a user watchlist)
-2) enriches each ticker with best-effort evidence (headlines + profile fields + short price series)
-3) synthesizes an explainable recommendation (LangGraph + OpenAI when available, with deterministic fallbacks)
-4) writes a complete run folder with:
-   - `digest.html` (human-friendly digest)
-   - `report.xlsx` (spreadsheet report)
-   - `digest.eml` (email file; always generated)
-   - `archive.jsonl` (one JSON record per ticker)
-   - `run.json` (run metadata + summary)
-   - `run.log` (structured JSONL logs)
-
-The project is intentionally:
-
-- VS Code friendly (works well with `py -3` on Windows)
-- resilient (per-ticker failures don’t crash the entire run)
-- explainable (every analysis includes a decision trace + provenance URLs)
-
-Important: `--date` is a **report label** (metadata). This is not a historical backtesting engine.
+With no `OPENAI_API_KEY`, the pipeline still runs and generates all artifacts.
 
 ---
 
-## Table of Contents
-
-- Quick start
-- What the project does
-- Modes: `movers` vs `watchlist`
-- Ingestion details (Yahoo sources, `--source`)
-- Watchlist file format
-- Enrichment details
-- Analysis architecture (LangGraph + fallbacks)
-- HITL (human-in-the-loop) review rules
-- Output artifacts (file-by-file)
-- Configuration & environment variables
-- CLI reference (every flag)
-- UiPath integration (function-call adapter)
-- Testing & hardening
-- Debugging & troubleshooting
-- Project layout
-
----
-
-## Quick Start
-
-### Install
-
-Windows PowerShell:
-
-```powershell
-py -3 -m pip install -r requirements.txt -r requirements-dev.txt
-```
-
-### Run a small “movers” run (fast sanity check)
-
-```powershell
-py -3 -m daily_movers run --mode movers --region us --top 5 --out runs/debug-top5 --no-open
-```
-
-### Run a mixed-market watchlist
-
-```powershell
-py -3 -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 20 --out runs/watchlist-demo --no-open
-```
-
-### Run tests
-
-```powershell
-py -3 -m pytest -q
-```
-
-### Convenience runner (Windows)
-
-```powershell
-.\scripts\tasks.ps1 help
-.\scripts\tasks.ps1 install
-.\scripts\tasks.ps1 test
-.\scripts\tasks.ps1 run-movers -Date 2026-02-08 -Top 20 -Region us -Out runs/2026-02-08
-.\scripts\tasks.ps1 run-watchlist -Watchlist watchlist.yaml -WatchOut runs/watchlist-demo
-```
-
----
-
-## Examples (Copy/Paste)
-
-### A) US movers: explicitly use Yahoo “most-active”
-
-Recommended for a realistic demo run.
-
-```powershell
-$env:MAX_WORKERS=2
-py -3 -m daily_movers run --date 2026-02-09 --mode movers --region us --source most-active --top 20 --out runs/most-active-us-top20 --no-open
-```
-
-What you get in `runs/most-active-us-top20/`:
-
-- `digest.html` (open it in a browser)
-- `report.xlsx`
-- `digest.eml`
-- `archive.jsonl`
-- `run.json`
-- `run.log`
-
-### B) Mixed-market watchlist: 60 symbols
-
-```powershell
-$env:MAX_WORKERS=2
-py -3 -m daily_movers run --date 2026-02-09 --mode watchlist --watchlist watchlist_all_exchanges_60.yaml --top 60 --out runs/all-exchanges-top60 --no-open
-```
-
-### C) Try SMTP sending (optional)
-
-SMTP send is attempted only when you pass `--send-email` and your SMTP env vars are set. The pipeline still always writes `digest.eml`.
-
-```powershell
-py -3 -m daily_movers run --date 2026-02-09 --mode movers --region us --top 20 --source most-active --send-email --out runs/email-demo --no-open
-```
-
-### D) UiPath adapter (function call)
-
-```powershell
-py -3 -c "from daily_movers.adapters.uipath import run_daily_movers; import json; print(json.dumps(run_daily_movers(out_dir='runs/uipath-demo', date='2026-02-09', mode='movers', region='us', source='most-active', top='5', send_email='false'), indent=2))"
-```
-
----
-
-## Best Test Runs (Copy/Paste)
-
-These are the highest-signal test commands to demonstrate correctness and regression coverage.
-
-### 1) Everything (fastest single command)
-
-```powershell
-py -3 -m pytest -q
-```
-
-### 2) Model + validation rules (schemas + HITL)
-
-```powershell
-py -3 -m pytest -q tests/test_models.py
-```
-
-### 3) Yahoo ingestion routing (including `--source` semantics)
-
-```powershell
-py -3 -m pytest -q tests/test_yahoo_movers_source.py
-```
-
-### 4) UiPath adapter contract (strict inputs, stable outputs)
-
-```powershell
-py -3 -m pytest -q tests/test_uipath_adapter.py
-```
-
-### 5) Golden run (artifact generation contract)
-
-```powershell
-py -3 -m pytest -q tests/test_golden_run.py
-```
-
-### 6) Ralphing harness (adversarial/failure-path hardening)
-
-```powershell
-py -3 -m pytest -q tests/ralphing_harness.py
-```
-
----
-
-## High-Value Notes (Stuff People Usually Miss)
-
-### 1) Success vs partial success vs failed (what it actually means)
-
-The pipeline is designed to be resilient. A single bad ticker should not crash the run.
-
-- **`status=success`**: the run completed and there were no error rows.
-- **`status=partial_success`**: the run completed and artifacts were generated, but at least one ticker row had errors (network timeouts, missing fields, parse issues, etc.).
-- **`status=failed`**: the run failed at a run-level step (rare). The run may still have some artifacts depending on where it failed.
-
-When you demo correctness, the key is: **artifacts exist even in partial-success runs**, and per-row errors are explicitly recorded.
-
-### 2) Where to look first when something “looks off”
-
-In order of usefulness:
-
-1) `run.json`
-  - run metadata (date/mode/region/source/top)
-  - run timings
-  - `status` and `summary`
-  - email metadata (attempted/sent/status/error/backend)
-2) `run.log`
-  - structured JSONL logs for every stage (ingestion/enrichment/analysis/email)
-  - includes retries, latency, fallback markers, and error messages
-3) `archive.jsonl`
-  - the full per-ticker payload (ticker/enrichment/analysis/needs_review/errors)
-
-Practical commands:
-
-```powershell
-Get-Content runs/debug-top5/run.json
-Get-Content runs/debug-top5/run.log | Select-Object -Last 50
-Get-Content runs/debug-top5/archive.jsonl | Select-Object -First 3
-```
-
-### 3) The CLI prints the “artifact index” (`paths`) for you
-
-After each run, the CLI prints a JSON object to stdout that looks like:
-
-- `status`: run status
-- `summary`: run summary counters and email metadata
-- `paths`: absolute/relative paths to artifacts
-
-This is the simplest integration point for scripts: parse stdout and use `paths["digest_html"]`, `paths["report_xlsx"]`, etc.
-
-### 4) Cache behavior (why reruns get faster)
-
-All Yahoo/OpenAI HTTP calls go through a disk-backed cache:
-
-- location: `CACHE_DIR` (default `.cache/http`)
-- TTL: `CACHE_TTL_SECONDS` (default 1800 seconds)
-
-Meaning:
-
-- rerunning the same request soon after is much faster
-- if you suspect stale data or want to force fresh pulls, delete the cache folder:
-
-```powershell
-Remove-Item -Recurse -Force .\.cache\http
-```
-
-### 5) Reliability knobs (when Yahoo/OpenAI gets flaky)
-
-These are the knobs that matter most for stable demos:
-
-- **Reduce concurrency** (most important):
-
-```powershell
-$env:MAX_WORKERS=2
-```
-
-- Increase Yahoo timeout:
-
-```powershell
-$env:REQUEST_TIMEOUT_SECONDS=30
-```
-
-- Increase OpenAI timeout (only affects OpenAI calls):
-
-```powershell
-$env:OPENAI_TIMEOUT_SECONDS=60
-```
-
-### 6) Common pitfalls / “gotchas”
-
-- `--date` is a label. It does not force Yahoo to return historical movers.
-- `--source most-active` only supports `--region us` (by design).
-- `--mode watchlist` requires `--watchlist` and the file must exist.
-- `--send-email` does not change whether `digest.eml` is created (it’s always created). It only controls whether SMTP sending is attempted.
-- If a run “looks empty”, check `--top` and then check `run.json` and `archive.jsonl` to confirm what was actually processed.
-
-### 7) Environment loading behavior on Windows
-
-Config loading uses `.env` (if present) and intentionally uses `override=true`. This avoids a common Windows issue where old shell environment variables accidentally override your `.env` values.
-
----
-
-## What the Project Does (End-to-End)
-
-Each run follows the same high-level stages:
-
-1) Ingest a list of tickers
-
-- `movers` mode: choose top-N “interesting” tickers based on region strategy
-- `watchlist` mode: load your provided list and fetch them
-
-2) Enrich each ticker (best effort)
-
-- recent price series (for sparkline)
-- sector/industry and earnings date when obtainable
-- top headlines (title + URL + optional published time)
-
-3) Analyze each ticker
-
-- produce: 2-sentence “why it moved”, sentiment, action, confidence
-- include a `decision_trace` explaining evidence + numeric signals + triggered rules
-- include `provenance_urls`
-
-4) Apply HITL rules to mark items requiring manual review
-
-5) Render artifacts (HTML + Excel + EML) and write structured logs and metadata
-
-The orchestrator is implemented in `daily_movers/pipeline/orchestrator.py`.
-
----
-
-## Modes: `movers` vs `watchlist`
+## Modes: movers vs watchlist
 
 ### Movers mode
 
 ```powershell
-py -3 -m daily_movers run --date 2026-02-09 --mode movers --region us --source auto --top 20 --out runs/2026-02-09
+py -3 -m daily_movers run --mode movers --region us --source most-active --top 20 --out runs/movers-demo
 ```
 
-Movers mode answers: “Given a market/region, what are the top N tickers worth investigating today?”
+Answers: "Given a market/region, what are the top N tickers worth investigating today?"
 
-- For `region=us`, movers are sourced from Yahoo’s “Most Active” screener (JSON primary, HTML fallback).
-- For `region=il|uk|eu|crypto`, movers are selected by ranking a curated universe using Yahoo chart data.
+- `region=us` → Yahoo "Most Active" screener (JSON primary, HTML fallback)
+- `region=il|uk|eu|crypto` → curated universe ranking via chart data
 
 ### Watchlist mode
 
 ```powershell
-py -3 -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 60 --out runs/watchlist-60
+py -3 -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 60 --out runs/watchlist-demo
 ```
 
-Watchlist mode answers: “Analyze exactly these symbols.”
+Answers: "Analyze exactly these symbols."
 
 ---
 
 ## Ingestion Details (Yahoo) and `--source`
 
-Ingestion code is in `daily_movers/providers/yahoo_movers.py`.
+Ingestion code: `daily_movers/providers/yahoo_movers.py`
 
-### Movers sources (`--source`)
+### `--source` options (movers mode only)
 
-`--source` controls how **movers mode** selects tickers:
+| Source | Behavior |
+|--------|----------|
+| `auto` (default) | US → screener; non-US → universe ranking |
+| `most-active` | Force Yahoo screener (only `region=us`) |
+| `universe` | Force curated universe ranking (all regions) |
 
-- `auto` (default)
-  - US → Yahoo screener `most_actives`
-  - non-US → curated universe ranking
-- `most-active`
-  - force Yahoo screener `most_actives` (only supported for `region=us`)
-- `universe`
-  - force curated universe ranking (supported for all regions)
+### Yahoo endpoints used
 
-### US “Most Active” endpoint
-
-Primary JSON endpoint:
-
-- `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved` with `scrIds=most_actives`
-
-If it fails or changes shape, ingestion falls back to parsing:
-
-- `https://finance.yahoo.com/most-active`
-
-Fallback usage is explicit:
-
-- row-level: `ingestion_fallback_used=true`
-- logging: `ingestion_primary_failed` in `run.log`
-
-### Non-US movers ranking
-
-Non-US movers are derived from `REGION_UNIVERSES` in `daily_movers/config.py`.
-The pipeline fetches chart data for each symbol and ranks by movement/volume.
-
-This is a deliberate tradeoff: stable, deterministic behavior over a fragile market-wide scraper.
+| Endpoint | Purpose | Fallback |
+|----------|---------|----------|
+| `v1/finance/screener/predefined/saved?scrIds=most_actives` | US most-active movers | → HTML scrape |
+| `finance.yahoo.com/most-active` | HTML fallback for US movers | — |
+| `v8/finance/chart/{symbol}` | Price history + non-US movers + watchlist | — |
+| `feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}` | Headlines | — |
+| `finance.yahoo.com/quote/{symbol}` | Sector, industry, earnings | — |
 
 ---
 
 ## Watchlist File Format (YAML/JSON)
-
-Accepted formats:
-
-1) YAML/YML object with `symbols:`
-2) JSON object with `symbols:`
-3) JSON list
-
-Example YAML:
 
 ```yaml
 symbols:
@@ -420,52 +200,42 @@ symbols:
   - BTC-USD
 ```
 
-Normalization behavior:
-
-- symbols are uppercased and trimmed
-- duplicates removed while preserving order
-- empty/invalid items ignored
-- if no valid symbols remain, ingestion fails with an `IngestionError`
+- Symbols are uppercased, trimmed, deduplicated (order preserved)
+- Empty/invalid items are silently ignored
+- If no valid symbols remain → `IngestionError`
 
 ---
 
 ## Enrichment (Best Effort)
 
-Enrichment is implemented in `daily_movers/providers/yahoo_ticker.py`.
+Code: `daily_movers/providers/yahoo_ticker.py`
 
-Typical enrichment includes:
+Per ticker, enrichment attempts:
+- **Headlines** (RSS feed — title + URL + published time)
+- **Sector / Industry** (Yahoo quote page, regex extraction)
+- **Earnings date** (best effort)
+- **Price series** (last 15 closes from chart API, for sparkline)
 
-- headline evidence (prefer RSS, best effort)
-- sector / industry (best effort)
-- earnings date (best effort)
-- short price series for trend sparkline
-
-Best-effort semantics:
-
-- missing fields are set to `null`
-- failures are recorded into `errors[]` on the row
-- the run continues
+Missing fields → `null`. Failures → recorded in `errors[]`. The run continues.
 
 ---
 
 ## Analysis Architecture
 
-### Required analysis fields
+### Required fields per ticker
 
-Per ticker, analysis must include:
+| Field | Type | Constraint |
+|-------|------|------------|
+| `why_it_moved` | string | Exactly 2 sentences |
+| `sentiment` | float | [-1, 1] |
+| `action` | enum | BUY / WATCH / SELL |
+| `confidence` | float | [0, 1] |
+| `decision_trace` | object | evidence + numeric signals + rules + summary |
+| `provenance_urls` | list | URLs backing the analysis |
 
-- `why_it_moved` (exactly 2 sentences)
-- `sentiment` in [-1, 1]
-- `action` in {BUY, WATCH, SELL}
-- `confidence` in [0, 1]
-- `decision_trace` (evidence + numeric signals + rules + summary)
-- `provenance_urls`
+Schema enforced by Pydantic models in `daily_movers/models.py`.
 
-The schema is enforced by Pydantic models in `daily_movers/models.py`.
-
-### LangGraph agent pipeline
-
-Primary path: a LangGraph `StateGraph` with 4 nodes:
+### LangGraph graph (primary path)
 
 ```
 Researcher  →  Analyst  →  Critic  →  Recommender
@@ -473,34 +243,24 @@ Researcher  →  Analyst  →  Critic  →  Recommender
                  └── retry ◄─┘   (at most one retry)
 ```
 
-Node responsibilities:
+Implemented in `daily_movers/pipeline/agent.py`.
 
-- Researcher: structure evidence into a compact summary + normalized headline list + numeric signals
-- Analyst: produce the analysis (LLM when configured, else heuristic)
-- Critic: guardrails (two-sentence enforcement, bounds checking, provenance consistency)
-- Recommender: assign portfolio tags (momentum/top-pick/contrarian, etc.)
+### Fallback chain
 
-This graph is implemented in `daily_movers/pipeline/agent.py`.
-
-### 3-tier fallback strategy
-
-The orchestrator uses this order:
-
-1) LangGraph agent pipeline
-2) raw OpenAI Responses API synthesis (`daily_movers/pipeline/llm.py`)
-3) deterministic heuristics (`daily_movers/pipeline/heuristics.py`)
-
-With no `OPENAI_API_KEY`, the pipeline still runs and generates all artifacts.
+1. LangGraph agent (`daily_movers/pipeline/agent.py`)
+2. Raw OpenAI Responses API (`daily_movers/pipeline/llm.py`)
+3. Deterministic heuristics (`daily_movers/pipeline/heuristics.py`)
 
 ---
 
 ## HITL (Human-in-the-loop) Review Rules
 
-HITL rules are implemented by `apply_hitl_rules` in `daily_movers/models.py`.
-Rows are flagged `needs_review=true` when any of these triggers fire:
+Implemented by `apply_hitl_rules()` in `daily_movers/models.py`.
+
+Rows are flagged `needs_review=true` when any trigger fires:
 
 - confidence < 0.75
-- abs(% change) > 15
+- |% change| > 15
 - missing headlines
 - ingestion fallback used
 - explicit errors exist
@@ -511,97 +271,163 @@ The row includes `needs_review_reason` listing all triggered reasons.
 
 ## Output Artifacts (Per Run Folder)
 
-Every run folder contains:
+| File | Description |
+|------|-------------|
+| `digest.html` | Single-file HTML digest with inline styling and sortable table |
+| `report.xlsx` | Spreadsheet report with highlights sheet |
+| `digest.eml` | RFC822 email message (always generated, even without SMTP) |
+| `archive.jsonl` | One JSON line per ticker — full structured data |
+| `run.json` | Run metadata: parameters, timings, status, summary, email metadata |
+| `run.log` | Structured JSONL logs (events, stages, errors, retries) |
 
-- `digest.html`
-  - a single-file HTML digest with inline styling and a sortable/filterable table
-- `report.xlsx`
-  - spreadsheet report with stable columns and a highlights view
-- `digest.eml`
-  - always generated, even if SMTP is not configured
-- `archive.jsonl`
-  - one line per ticker; full structured data for audits/debugging
-- `run.json`
-  - run metadata: parameters, timings, status, summary, email metadata
-- `run.log`
-  - structured JSONL logs (events, stages, errors, retries)
+The CLI prints `{status, summary, paths}` JSON to stdout after each run.
 
-The CLI prints a `RunArtifacts` JSON object to stdout, containing `{status, summary, paths}`.
+---
+
+## Email & SMTP Setup
+
+### How email works
+
+- **`digest.eml`** is always written to the run folder (no configuration needed)
+- **SMTP sending** only happens when you pass `--send-email` and SMTP credentials are configured
+- The SMTP backend tries STARTTLS first, then falls back to SSL
+
+### Option A: Ethereal Email (recommended for demos)
+
+[Ethereal](https://ethereal.email/) is a free fake SMTP service. Emails are captured in a web inbox — nothing is delivered to real addresses.
+
+**Step 1 — Create an Ethereal account**
+
+1. Go to https://ethereal.email/create
+2. Click **"Create Ethereal Account"**
+3. Download the `credentials.csv` file (or copy the SMTP credentials shown on screen)
+
+**Step 2 — Place `credentials.csv` in the project root**
+
+The file Ethereal gives you looks like:
+
+```csv
+"Service","Name","Username","Password","Hostname","Port","Security"
+"SMTP","Your Name","your.name@ethereal.email","yourpassword","smtp.ethereal.email",587,"STARTTLS"
+"IMAP","Your Name","your.name@ethereal.email","yourpassword","imap.ethereal.email",993,"TLS"
+"POP3","Your Name","your.name@ethereal.email","yourpassword","pop3.ethereal.email",995,"TLS"
+```
+
+> `credentials.csv` is git-ignored — it will **never** be committed.
+
+**Step 3 — Run the Ethereal helper**
+
+```powershell
+py -3 scripts/ethereal_run.py
+```
+
+This will:
+- Read SMTP credentials from `credentials.csv`
+- Run a fresh movers pipeline (top 5, US most-active)
+- Send the digest via Ethereal SMTP
+- Open `digest.html` in your browser
+
+**Step 4 — View the captured email**
+
+1. Go to https://ethereal.email/login
+2. Log in with your Ethereal username and password
+3. Click **Messages** — your digest email will be there
+
+### Option B: Gmail (App Password)
+
+Set in `.env`:
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SSL_PORT=465
+SMTP_USERNAME=your_email@gmail.com
+SMTP_PASSWORD=your_app_password
+FROM_EMAIL=your_email@gmail.com
+SELF_EMAIL=your_email@gmail.com
+```
+
+Then run with `--send-email`:
+
+```powershell
+py -3 -m daily_movers run --mode movers --region us --top 5 --send-email --out runs/email-test
+```
+
+### Option C: Mailtrap
+
+```env
+SMTP_HOST=sandbox.smtp.mailtrap.io
+SMTP_PORT=587
+SMTP_SSL_PORT=465
+SMTP_USERNAME=<mailtrap_username>
+SMTP_PASSWORD=<mailtrap_password>
+FROM_EMAIL=alerts@example.test
+SELF_EMAIL=alerts@example.test
+```
 
 ---
 
 ## Configuration & Environment Variables
 
 Configuration is a Pydantic model (`AppConfig`) in `daily_movers/config.py`.
-`load_config()` loads `.env` (if present) and overrides existing process env vars.
+`load_config()` loads `.env` (with `override=True` to avoid stale Windows shell vars).
 
-### Common knobs
+### Runtime tuning
 
-- `MAX_WORKERS` (default 5)
-- `REQUEST_TIMEOUT_SECONDS` (default 20)
-- `CACHE_TTL_SECONDS` (default 1800)
-- `CACHE_DIR` (default `.cache/http`)
-- `LOG_LEVEL` (default `INFO`)
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MAX_WORKERS` | 5 | Thread pool size for parallel ticker processing |
+| `REQUEST_TIMEOUT_SECONDS` | 20 | Yahoo HTTP timeout |
+| `CACHE_DIR` | `.cache/http` | Disk cache location |
+| `CACHE_TTL_SECONDS` | 1800 | Cache freshness window |
+| `LOG_LEVEL` | INFO | Logging verbosity |
 
-### OpenAI
+### OpenAI (optional)
 
-- `OPENAI_API_KEY` (optional)
-- `ANALYSIS_MODEL` (default `gpt-4o-mini`)
-- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-- `OPENAI_TIMEOUT_SECONDS` (default 45)
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENAI_API_KEY` | — | Enables LLM analysis (pipeline works without it) |
+| `ANALYSIS_MODEL` | `gpt-4o-mini` | OpenAI model name |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL |
+| `OPENAI_TIMEOUT_SECONDS` | 45 | OpenAI request timeout |
 
 ### SMTP (optional)
 
-The pipeline always writes `digest.eml`. SMTP sending only happens if you pass `--send-email`.
-SMTP becomes “ready” when these are set:
-
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SSL_PORT`
-- `SMTP_USERNAME`, `SMTP_PASSWORD`
-- `FROM_EMAIL`, `SELF_EMAIL`
-
-See the bottom of this README for copy/paste SMTP presets.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP server hostname |
+| `SMTP_PORT` | 587 | STARTTLS port |
+| `SMTP_SSL_PORT` | 465 | SSL fallback port |
+| `SMTP_USERNAME` | — | SMTP login username |
+| `SMTP_PASSWORD` | — | SMTP login password |
+| `FROM_EMAIL` | — | Sender address |
+| `SELF_EMAIL` | — | Recipient address |
 
 ---
 
 ## CLI Reference (Every Flag)
 
-Entrypoint:
-
 ```powershell
 py -3 -m daily_movers run [flags]
 ```
 
-Flags:
-
-- `--date YYYY-MM-DD`
-  - report metadata label (defaults to today)
-- `--mode movers|watchlist`
-  - ticker selection mode
-- `--region us|il|uk|eu|crypto`
-  - region strategy (movers mode)
-- `--source auto|most-active|universe`
-  - movers ingestion source selector
-- `--top N`
-  - number of items to ingest/analyze
-- `--watchlist PATH`
-  - required for watchlist mode (YAML/YML/JSON)
-- `--out PATH`
-  - output directory (default `runs/<date>`)
-- `--send-email`
-  - attempt SMTP delivery if configured
-- `--no-open`
-  - disable auto-opening `digest.html`
+| Flag | Values | Default | Purpose |
+|------|--------|---------|---------|
+| `--date` | `YYYY-MM-DD` | today | Report metadata label (not historical) |
+| `--mode` | `movers` / `watchlist` | `movers` | Ticker selection mode |
+| `--region` | `us` / `il` / `uk` / `eu` / `crypto` | `us` | Region strategy (movers mode) |
+| `--source` | `auto` / `most-active` / `universe` | `auto` | Movers ingestion source |
+| `--top` | integer | 20 | Number of tickers to process |
+| `--watchlist` | file path | — | Required for watchlist mode |
+| `--out` | directory path | `runs/<date>` | Output directory |
+| `--send-email` | flag | off | Attempt SMTP delivery |
+| `--no-open` | flag | off | Don't auto-open digest.html |
 
 ---
 
 ## UiPath Integration (Function-call Adapter)
 
-UiPath commonly passes inputs as strings, so this repo includes a strict adapter:
-
-- module: `daily_movers/adapters/uipath.py`
-- function: `run_daily_movers(out_dir, *, date, mode, region, source, top, watchlist, send_email)`
-
-Example:
+Module: `daily_movers/adapters/uipath.py`
 
 ```python
 from daily_movers.adapters.uipath import run_daily_movers
@@ -617,150 +443,157 @@ result = run_daily_movers(
 )
 ```
 
-Contract notes:
-
-- unknown arguments are rejected (Python raises `TypeError`)
-- `mode=watchlist` requires `watchlist` and the path must exist
-- returns a JSON-serializable dict with keys: `status`, `summary`, `paths`
-- `run.json` in the run folder is the canonical machine-readable record
+Contract:
+- All inputs accept strings (UiPath-friendly coercion)
+- Unknown arguments raise `TypeError`
+- `mode=watchlist` requires `watchlist` and the file must exist
+- Returns `dict` with keys: `status`, `summary`, `paths`
 
 ---
 
 ## Testing & Hardening
 
-Run all tests:
-
 ```powershell
 py -3 -m pytest -q
 ```
 
-Determinism note:
+### High-signal test subsets
 
-- this repo includes `sitecustomize.py` to set `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` when running pytest
-- this prevents unrelated third-party pytest plugins installed in your environment from breaking test runs
+| Command | What it covers |
+|---------|---------------|
+| `py -3 -m pytest tests/test_models.py -q` | Pydantic schemas + HITL rules |
+| `py -3 -m pytest tests/test_yahoo_movers_source.py -q` | Ingestion routing + `--source` |
+| `py -3 -m pytest tests/test_uipath_adapter.py -q` | UiPath adapter contract |
+| `py -3 -m pytest tests/test_golden_run.py -q` | Artifact generation |
+| `py -3 -m pytest tests/test_email_backends.py -q` | Email backends + SMTP fallback |
+| `py -3 -m pytest tests/test_llm_normalization.py -q` | OpenAI output normalization |
+| `py -3 -m pytest tests/ralphing_harness.py -q` | Adversarial / failure paths |
 
-Focused test runs:
-
-```powershell
-py -3 -m pytest tests/test_models.py -q
-py -3 -m pytest tests/test_golden_run.py -q
-py -3 -m pytest tests/ralphing_harness.py -q
-```
+Note: `sitecustomize.py` sets `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` to prevent third-party pytest plugins from breaking test runs.
 
 ---
 
 ## Debugging & Troubleshooting
 
-Practical debug recipe:
+### VS Code debug configurations
 
-1) Print resolved config:
+The repo includes 4 debug configs in `.vscode/launch.json`:
+
+- **Movers US (Most-Active Top 5 FAST)** — single-threaded, quickest for stepping through
+- **Movers US (Most-Active Top 20)** — full run
+- **Watchlist (All Exchanges 60)** — multi-market
+- **UiPath Adapter (Smoke)** — runs `scripts/uipath_smoke.py`
+
+### Practical debug recipe
 
 ```powershell
+# 1. Print resolved config
 py -3 -c "from daily_movers.config import load_config; print(load_config().model_dump())"
-```
 
-2) Run a small run:
-
-```powershell
+# 2. Run a small test
 py -3 -m daily_movers run --mode movers --region us --top 5 --out runs/debug-top5 --no-open
+
+# 3. Inspect metadata and logs
+Get-Content runs/debug-top5/run.json
+Get-Content runs/debug-top5/run.log | Select-Object -Last 30
 ```
 
-3) Inspect metadata and logs:
+### Common issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Yahoo throttling | Too many parallel requests | `$env:MAX_WORKERS=1` |
+| Slow/timeout | Network latency | Raise `REQUEST_TIMEOUT_SECONDS` |
+| No OpenAI output | Missing API key | Expected — heuristic fallback works |
+| SMTP auth failure | Bad credentials | Non-fatal; `.eml` is still written |
+| Run "looks empty" | Low `--top` or ingestion error | Check `run.json` + `archive.jsonl` |
+
+---
+
+## High-Value Notes (Stuff People Usually Miss)
+
+### Run status semantics
+
+| Status | Meaning |
+|--------|---------|
+| `success` | All tickers processed without errors |
+| `partial_success` | Artifacts generated, but ≥1 ticker had errors |
+| `failed` | Run-level failure (rare) |
+
+### Where to look when something seems wrong
+
+1. `run.json` — status, summary, email metadata
+2. `run.log` — structured JSONL with retries, latencies, errors
+3. `archive.jsonl` — full per-ticker payload including error details
+
+### Cache behavior
+
+- All HTTP calls go through disk cache at `CACHE_DIR` (default `.cache/http`)
+- TTL: `CACHE_TTL_SECONDS` (default 1800s)
+- Force fresh data: `Remove-Item -Recurse -Force .\.cache\http`
+
+### `--date` is a label
+
+`--date` sets report metadata only. It does not fetch historical data.
+
+### Reliability knobs for stable demos
 
 ```powershell
-Get-Content runs/debug-top5/run.json
-Get-Content runs/debug-top5/run.log | Select-Object -Last 50
+$env:MAX_WORKERS=1
+$env:REQUEST_TIMEOUT_SECONDS=30
+$env:OPENAI_TIMEOUT_SECONDS=60
 ```
-
-Common issues:
-
-- Yahoo throttling: check `run.log` for `http_fetch_failed` / `ingestion_primary_failed`
-- slow network/timeouts: lower `MAX_WORKERS` and raise timeouts
-- no OpenAI key: expected; heuristic fallback still produces outputs
-- SMTP auth failure: non-fatal; `.eml` is still written
 
 ---
 
 ## Project Layout
 
-```text
+```
 daily_movers/
-  __main__.py            # python -m daily_movers entrypoint
-  cli.py                 # argparse-based CLI
-  config.py              # AppConfig + env loading + region universes
-  errors.py              # application-specific exceptions
-  models.py              # Pydantic models + HITL rules
+  __main__.py              # python -m daily_movers entrypoint
+  cli.py                   # argparse CLI
+  config.py                # AppConfig + env loading + region universes
+  errors.py                # typed exceptions
+  models.py                # Pydantic models + HITL rules
   adapters/
-    uipath.py            # strict UiPath adapter
-  providers/
-    yahoo_movers.py      # movers + watchlist ingestion
-    yahoo_ticker.py      # per-ticker enrichment
-  pipeline/
-    orchestrator.py      # orchestration + artifact writing
-    agent.py             # LangGraph analysis graph
-    llm.py               # raw OpenAI analyzer
-    heuristics.py        # deterministic analysis
-    critic.py            # guardrails
-  render/
-    html.py              # digest renderer
-    excel.py             # Excel renderer
+    uipath.py              # strict UiPath function-call adapter
   email/
-    eml_backend.py       # always writes digest.eml
-    smtp_backend.py      # optional SMTP delivery
+    base.py                # Protocol interfaces (EmlWriter, SmtpSender)
+    eml_backend.py         # always writes digest.eml
+    smtp_backend.py        # optional SMTP delivery (STARTTLS + SSL fallback)
+  pipeline/
+    orchestrator.py        # orchestration + artifact writing
+    agent.py               # LangGraph analysis graph (4-node StateGraph)
+    llm.py                 # raw OpenAI Responses API analyzer
+    heuristics.py          # deterministic rule-based analysis
+    critic.py              # guardrails (confidence, provenance, format)
+  providers/
+    yahoo_movers.py        # movers + watchlist ingestion
+    yahoo_ticker.py        # per-ticker enrichment (chart, RSS, quote)
+  render/
+    html.py                # digest HTML renderer
+    excel.py               # Excel renderer
+    eml.py                 # EML message builder (standalone)
   storage/
-    cache.py             # disk HTTP cache
-    runs.py              # run dirs + structured logger
+    cache.py               # disk HTTP cache + HttpClient protocol
+    runs.py                # run dirs + structured logger
+
+scripts/
+  ethereal_run.py          # one-click Ethereal SMTP demo
+  uipath_smoke.py          # UiPath adapter debug entrypoint
+  tasks.ps1                # Windows convenience runner
+  demo.sh                  # bash demo script
 
 tests/
-  fixtures/
-  ralphing_harness.py
-  test_agent.py
-  test_cli.py
-  test_email_backends.py
-  test_golden_run.py
-  test_llm_normalization.py
-  test_models.py
-  test_optional_fallbacks.py
-  test_uipath_adapter.py
-  test_yahoo_movers_source.py
-```
-
----
-
-## SMTP Presets (Copy/Paste)
-
-Gmail (App Password required):
-
-```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SSL_PORT=465
-SMTP_USERNAME=your_email@gmail.com
-SMTP_PASSWORD=your_app_password
-FROM_EMAIL=your_email@gmail.com
-SELF_EMAIL=your_email@gmail.com
-```
-
-Mailtrap sandbox:
-
-```env
-SMTP_HOST=sandbox.smtp.mailtrap.io
-SMTP_PORT=587
-SMTP_SSL_PORT=465
-SMTP_USERNAME=<mailtrap_username>
-SMTP_PASSWORD=<mailtrap_password>
-FROM_EMAIL=alerts@example.test
-SELF_EMAIL=alerts@example.test
-```
-
-Ethereal:
-
-```env
-SMTP_HOST=smtp.ethereal.email
-SMTP_PORT=587
-SMTP_SSL_PORT=465
-SMTP_USERNAME=<ethereal_username>
-SMTP_PASSWORD=<ethereal_password>
-FROM_EMAIL=<ethereal_username>
-SELF_EMAIL=<ethereal_username>
+  fixtures/                # test data (JSON, XML)
+  test_models.py           # schema + HITL validation
+  test_yahoo_movers_source.py  # ingestion routing
+  test_uipath_adapter.py   # adapter contract
+  test_golden_run.py       # artifact generation
+  test_email_backends.py   # email backend coverage
+  test_llm_normalization.py    # OpenAI output normalization
+  test_agent.py            # LangGraph agent tests
+  test_cli.py              # CLI argument parsing
+  test_optional_fallbacks.py   # fallback chain
+  ralphing_harness.py      # adversarial hardening
 ```

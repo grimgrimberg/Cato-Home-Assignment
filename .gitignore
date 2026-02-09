@@ -8,5 +8,6 @@ runs/
 *.xlsx
 *.eml
 .DS_Store
+.playwright-mcp/
 
 .venv/

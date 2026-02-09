@@ -35,6 +35,8 @@
     .\scripts\full_run.ps1 -Top 30 -NoOpen
 #>
 
+# PSScriptAnalyzer -IgnoreRule PSUseDeclaredVarsMoreThanAssignments
+
 param(
     [int]$Top = 60,
     [switch]$NoOpen,
@@ -76,7 +78,8 @@ $SendEmail = $false
 if (-not (Test-Path $CredsPath)) {
     Write-Host "  [WARN] credentials.csv not found - email will NOT be sent" -ForegroundColor Yellow
     Write-Host "         To enable email: download credentials.csv from https://ethereal.email/create" -ForegroundColor Yellow
-} else {
+}
+else {
     Write-Host "  [OK] SMTP credentials: $CredsPath" -ForegroundColor Green
     $SendEmail = $true
 }
@@ -153,7 +156,8 @@ Write-Host "----------------------------------------------------------------" -F
 try {
     & py @PythonArgs
     $ExitCode = $LASTEXITCODE
-} catch {
+}
+catch {
     Write-Host ""
     Write-Host "[ERROR] Pipeline failed: $_" -ForegroundColor Red
     exit 1
@@ -173,7 +177,8 @@ Write-Host "================================================================" -F
 if ($ExitCode -eq 0) {
     Write-Host ""
     Write-Host "  Status:   SUCCESS" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host ""
     Write-Host "  Status:   PARTIAL/FAILED (exit code $ExitCode)" -ForegroundColor Yellow
 }

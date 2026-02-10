@@ -13,10 +13,12 @@ from daily_movers.models import utc_now_iso
 class StructuredLogger:
     path: Path
     run_id: str
+    log_level: str = "INFO"
 
     def __post_init__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
+        self._min_level = _level_to_int(self.log_level)
 
     def log(
         self,
@@ -34,6 +36,8 @@ class StructuredLogger:
         fallback_used: bool = False,
         **extra: Any,
     ) -> None:
+        if _level_to_int(level) < self._min_level:
+            return
         payload: dict[str, Any] = {
             "timestamp": utc_now_iso(),
             "level": level.lower(),
@@ -62,6 +66,11 @@ class StructuredLogger:
 
     def error(self, event: str, stage: str, **kwargs: Any) -> None:
         self.log(level="error", event=event, stage=stage, status="error", **kwargs)
+
+
+def _level_to_int(level: str) -> int:
+    mapping = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+    return mapping.get(level.strip().lower(), 20)
 
 
 def ensure_run_dir(out_dir: Path) -> Path:

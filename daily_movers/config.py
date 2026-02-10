@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+"""Application configuration (loaded from environment variables + .env).
+
+Design:
+- All settings have sensible defaults for demo/dev use.
+- Optional features (OpenAI, SMTP) are disabled-by-default.
+- Environment variables always override .env file values.
+"""
+
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
 
+# Small curated universes for non-US regions (used when Yahoo screener isn't
+# available or when --source=universe is explicitly requested).
 REGION_UNIVERSES: dict[str, list[str]] = {
     "us": [
         "AAPL",
@@ -29,18 +39,25 @@ REGION_UNIVERSES: dict[str, list[str]] = {
 
 
 class AppConfig(BaseModel):
+    # HTTP cache settings (Yahoo endpoints can be slow/flaky)
     cache_dir: Path = Path(".cache/http")
-    cache_ttl_seconds: int = 1800
+    cache_ttl_seconds: int = 1800  # 30 minutes
+    
+    # Concurrency controls (prevents hammering Yahoo)
     max_workers: int = 5
+    max_requests_per_host: int = 5
     request_timeout_seconds: int = 20
     openai_timeout_seconds: int = 45
+    
     user_agent: str = "DailyMoversAssistant/0.1"
     log_level: str = "INFO"
 
+    # OpenAI settings (optional; pipeline works without an API key)
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     analysis_model: str = "gpt-4o-mini"
 
+    # SMTP settings (optional; digest.eml is always written even without SMTP)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
     smtp_ssl_port: int = 465
@@ -49,7 +66,13 @@ class AppConfig(BaseModel):
     from_email: str | None = None
     self_email: str | None = None
 
-    @field_validator("cache_ttl_seconds", "max_workers", "request_timeout_seconds", "openai_timeout_seconds")
+    @field_validator(
+        "cache_ttl_seconds",
+        "max_workers",
+        "max_requests_per_host",
+        "request_timeout_seconds",
+        "openai_timeout_seconds",
+    )
     @classmethod
     def _positive_int(cls, value: int) -> int:
         if value <= 0:
@@ -98,6 +121,7 @@ def load_config(env_file: str | None = ".env") -> AppConfig:
         cache_dir=Path(_getenv_str("CACHE_DIR", ".cache/http")),
         cache_ttl_seconds=int(_getenv_str("CACHE_TTL_SECONDS", "1800")),
         max_workers=int(_getenv_str("MAX_WORKERS", "5")),
+        max_requests_per_host=int(_getenv_str("MAX_REQUESTS_PER_HOST", "5")),
         request_timeout_seconds=int(_getenv_str("REQUEST_TIMEOUT_SECONDS", "20")),
         openai_timeout_seconds=int(_getenv_str("OPENAI_TIMEOUT_SECONDS", "45")),
         log_level=_getenv_str("LOG_LEVEL", "INFO"),

@@ -1,8 +1,28 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+"""Pipeline orchestrator (the main entrypoint behind the CLI).
+
+This module is intentionally boring: it wires together the subsystems and ensures
+every run produces a complete set of local artifacts even when upstream services
+fail.
+
+High-level flow (one CLI invocation → one run folder):
+
+1) Ingest tickers (movers list or watchlist)
+2) For each ticker (in parallel): enrich → analyze → critic/HITL
+3) Render outputs: HTML digest + Excel report + JSONL archive + run metadata
+4) Build an EML message (always) and optionally send it via SMTP
+
+Key behavior:
+- The run does not crash on per-ticker failures; errors are embedded into rows.
+- Analysis uses a tiered strategy: heuristics baseline → LangGraph agent → raw
+    OpenAI fallback → heuristics.
+"""
+
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -46,17 +66,26 @@ class RunRequest:
 
 
 def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) -> RunArtifacts:
+    """Run the full pipeline once and write artifacts to the run directory.
+
+    This is the function the CLI calls.
+
+    Returns a RunArtifacts object containing:
+    - status + summary counts
+    - absolute/relative paths to the generated outputs
+    """
     cfg = config or load_config()
     run_id = uuid4().hex[:12]
     started_at = utc_now_iso()
 
     out_dir = ensure_run_dir(Path(request.out_dir))
-    logger = StructuredLogger(path=out_dir / "run.log", run_id=run_id)
+    logger = StructuredLogger(path=out_dir / "run.log", run_id=run_id, log_level=cfg.log_level)
     http_client = CachedHttpClient(
         cache_dir=cfg.cache_dir,
         default_ttl_seconds=cfg.cache_ttl_seconds,
         timeout_seconds=cfg.request_timeout_seconds,
         user_agent=cfg.user_agent,
+        max_requests_per_host=cfg.max_requests_per_host,
     )
     llm = OpenAIAnalyzer(config=cfg, logger=logger)
     eml_backend = EmlBackend(logger=logger)
@@ -73,8 +102,13 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
         out_dir=str(out_dir),
     )
 
-    ticker_rows = _ingest_rows(request=request, client=http_client, logger=logger)
+    total_start = time.perf_counter()
 
+    ingest_start = time.perf_counter()
+    ticker_rows = _ingest_rows(request=request, client=http_client, logger=logger)
+    ingest_ms = int((time.perf_counter() - ingest_start) * 1000)
+
+    process_start = time.perf_counter()
     report_rows = _process_rows(
         rows=ticker_rows,
         client=http_client,
@@ -83,6 +117,7 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
         config=cfg,
         max_workers=cfg.max_workers,
     )
+    process_ms = int((time.perf_counter() - process_start) * 1000)
 
     if request.mode == "movers":
         report_rows.sort(
@@ -108,6 +143,7 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
         ],
     )
 
+    render_start = time.perf_counter()
     digest_html = build_digest_html(
         rows=report_rows,
         run_meta={
@@ -124,7 +160,9 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
 
     excel_path = out_dir / "report.xlsx"
     write_excel_report(rows=report_rows, out_path=excel_path)
+    render_ms = int((time.perf_counter() - render_start) * 1000)
 
+    email_start = time.perf_counter()
     from_email = cfg.from_email or "daily-movers@localhost"
     to_email = cfg.self_email or from_email
     subject = f"Daily Movers Digest - {request.date}"
@@ -184,6 +222,7 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
                 error_type="MissingCredentials",
                 error_message="SMTP credentials not fully configured",
             )
+    email_ms = int((time.perf_counter() - email_start) * 1000)
 
     summary = _build_summary(
         report_rows=report_rows,
@@ -192,6 +231,7 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
     )
     status = _resolve_run_status(report_rows=report_rows, email_meta=email_meta)
     ended_at = utc_now_iso()
+    total_ms = int((time.perf_counter() - total_start) * 1000)
 
     run_meta = RunMeta(
         run_id=run_id,
@@ -206,6 +246,13 @@ def run_daily_movers(*, request: RunRequest, config: AppConfig | None = None) ->
         status=status,
         summary=summary,
         email=email_meta,
+        timings_ms={
+            "ingestion": ingest_ms,
+            "processing": process_ms,
+            "rendering": render_ms,
+            "email": email_ms,
+            "total": total_ms,
+        },
     )
 
     run_json_path = out_dir / "run.json"
@@ -286,35 +333,68 @@ def _process_rows(
 
     results: list[ReportRow | None] = [None] * len(rows)
 
+    # Per-ticker processing is embarrassingly parallel (HTTP-bound), so we use a
+    # thread pool. A separate per-host semaphore in CachedHttpClient prevents
+    # hammering Yahoo with too many concurrent requests.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
             executor.submit(_process_single_row, idx, row, client, logger, llm, config): idx
             for idx, row in enumerate(rows)
         }
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results[idx] = future.result()
-            except Exception as exc:  # noqa: BLE001
-                fallback_row = rows[idx]
+        per_row_timeout = max(60, config.request_timeout_seconds * 6)
+        batches = max(1, (len(rows) + max_workers - 1) // max_workers)
+        overall_timeout = per_row_timeout * batches
+        completed: set[int] = set()
+        try:
+            for future in as_completed(future_to_idx, timeout=overall_timeout):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    fallback_row = rows[idx]
+                    analysis = analyze_with_heuristics(
+                        row=fallback_row,
+                        enrichment=Enrichment(),
+                    )
+                    analysis.errors.append(
+                        ErrorInfo(
+                            stage="analysis",
+                            error_type=exc.__class__.__name__,
+                            error_message=str(exc),
+                        )
+                    )
+                    report = ReportRow(
+                        ticker=fallback_row,
+                        enrichment=Enrichment(),
+                        analysis=analysis,
+                        status="partial",
+                        needs_review=True,
+                        needs_review_reason=["processing_exception"],
+                    )
+                    results[idx] = apply_hitl_rules(report)
+                completed.add(idx)
+        except TimeoutError:
+            for idx, row in enumerate(rows):
+                if idx in completed:
+                    continue
                 analysis = analyze_with_heuristics(
-                    row=fallback_row,
+                    row=row,
                     enrichment=Enrichment(),
                 )
                 analysis.errors.append(
                     ErrorInfo(
                         stage="analysis",
-                        error_type=exc.__class__.__name__,
-                        error_message=str(exc),
+                        error_type="TimeoutError",
+                        error_message="processing timed out",
                     )
                 )
                 report = ReportRow(
-                    ticker=fallback_row,
+                    ticker=row,
                     enrichment=Enrichment(),
                     analysis=analysis,
                     status="partial",
                     needs_review=True,
-                    needs_review_reason=["processing_exception"],
+                    needs_review_reason=["processing_timeout"],
                 )
                 results[idx] = apply_hitl_rules(report)
 
@@ -336,6 +416,15 @@ def _process_single_row(
     analysis = heuristic_analysis
     recommendation_tags: list[str] = []
 
+    # Analysis strategy (in priority order):
+    # 1) LangGraph agent: multi-node reasoning with guardrails. It may use OpenAI
+    #    if configured, but still works in heuristic mode.
+    # 2) Raw OpenAI fallback: only when the agent failed and OPENAI_API_KEY exists.
+    # 3) Deterministic heuristics: always available baseline.
+    #
+    # This arrangement keeps the pipeline reliable: you always get a digest even
+    # with no API keys or when upstream dependencies are flaky.
+
     # --- Path 1: LangGraph agent (primary) ---
     agent_succeeded = False
     try:
@@ -347,10 +436,9 @@ def _process_single_row(
         )
         analysis = agent_analysis
         agent_succeeded = True
-        # Extract recommendation tags from the agent state if available
-        if hasattr(agent_analysis, 'model_used') and 'langgraph' in (agent_analysis.model_used or ''):
-            # Tags are embedded during agent run; we re-derive them here
-            recommendation_tags = _derive_recommendation_tags(row, analysis)
+        # Tags are derived from the final analysis; this is intentionally
+        # deterministic so Excel/HTML stay consistent across model variants.
+        recommendation_tags = _derive_recommendation_tags(row, analysis)
         logger.info(
             "agent_analysis_used",
             stage="analysis",
@@ -364,6 +452,7 @@ def _process_single_row(
             symbol=row.ticker,
             error_type=exc.__class__.__name__,
             error_message=str(exc),
+            fallback_used=True,
         )
 
     # --- Path 2: Raw OpenAI fallback (secondary) ---
@@ -382,6 +471,7 @@ def _process_single_row(
                 error_type=exc.__class__.__name__,
                 error_message=str(exc),
                 url=exc.url,
+                fallback_used=True,
             )
 
     # --- Path 3: Heuristics already assigned as default ---

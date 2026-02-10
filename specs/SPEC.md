@@ -4,7 +4,7 @@
 Python + pip only, runnable in plain VS Code. No UiPath dependency for MVP.
 
 ## REQ-001 Movers Ingestion
-- Fetch most active top N (default 20): ticker, name, price, abs change, % change, volume.
+- Fetch most active top N (default 20): ticker, name, open, close, price, abs change, % change, volume.
 - Primary source: Yahoo screener JSON (`most_actives`) for US.
 - Fallback: Yahoo HTML most-active parsing.
 
@@ -58,6 +58,7 @@ Per run folder:
 - `archive.jsonl`: one full record per ticker.
 - `run.json` and `run.log`.
 - Sparkline: include mini trend; if unavailable, gracefully note fallback.
+- Report table includes open and close prices.
 
 ### Acceptance
 - All files are generated even for partial-success runs.

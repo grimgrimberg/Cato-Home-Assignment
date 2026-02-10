@@ -19,9 +19,9 @@ to deterministic heuristic logic – so the pipeline never crashes.
 from __future__ import annotations
 
 import json
-import logging
 import math
 import re
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 from daily_movers.config import AppConfig
@@ -35,8 +35,6 @@ from daily_movers.models import (
 )
 from daily_movers.storage.runs import StructuredLogger
 
-logger = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # Typed state that flows through the graph
 # ---------------------------------------------------------------------------
@@ -48,6 +46,7 @@ class AgentState(TypedDict, total=False):
     _config: dict[str, Any]
     _logger_path: str
     _run_id: str
+    _log_level: str
     evidence_summary: str
     evidence_headlines: list[dict[str, Any]]
     numeric_signals: dict[str, Any]
@@ -142,6 +141,7 @@ def run_agent_analysis(
     initial_state["_config"] = config.model_dump()  # type: ignore[typeddict-unknown-key]
     initial_state["_logger_path"] = str(run_logger.path)  # type: ignore[typeddict-unknown-key]
     initial_state["_run_id"] = run_logger.run_id  # type: ignore[typeddict-unknown-key]
+    initial_state["_log_level"] = config.log_level  # type: ignore[typeddict-unknown-key]
 
     try:
         graph = _get_graph()
@@ -168,6 +168,7 @@ def run_agent_analysis(
             symbol=row.ticker,
             error_type=exc.__class__.__name__,
             error_message=str(exc),
+            fallback_used=True,
         )
         # Fall back to deterministic heuristics
         from daily_movers.pipeline.heuristics import analyze_with_heuristics
@@ -205,6 +206,8 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
         "pct_change": pct,
         "volume": volume,
         "headline_count": len(evidence),
+        "open_price": enrichment.get("open_price"),
+        "close_price": enrichment.get("close_price"),
         "sector": enrichment.get("sector"),
         "industry": enrichment.get("industry"),
         "earnings_date": enrichment.get("earnings_date"),
@@ -270,7 +273,15 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
             result["model_used"] = f"langgraph:openai:{config_dict.get('analysis_model', 'gpt-4o-mini')}"
             return {"analyst_output": result, "model_used": result["model_used"]}
         except Exception as exc:
-            logger.warning("LLM analyst failed (%s), falling back to heuristics", exc)
+            _log_agent_event(
+                state,
+                level="warning",
+                event="agent_llm_failed",
+                stage="agent",
+                error_type=exc.__class__.__name__,
+                error_message=str(exc),
+                fallback_used=True,
+            )
 
     # Heuristic fallback
     result = _heuristic_analyst(
@@ -686,3 +697,13 @@ def _fmt_vol(volume: float) -> str:
     if volume >= 1_000:
         return f"{volume / 1_000:.2f}K"
     return f"{volume:.0f}"
+
+
+def _log_agent_event(state: AgentState, *, level: str, event: str, stage: str, **kwargs: Any) -> None:
+    path = state.get("_logger_path")
+    run_id = state.get("_run_id")
+    log_level = state.get("_log_level", "INFO")
+    if not path or not run_id:
+        return
+    logger = StructuredLogger(path=Path(path), run_id=run_id, log_level=str(log_level))
+    logger.log(level=level, event=event, stage=stage, **kwargs)

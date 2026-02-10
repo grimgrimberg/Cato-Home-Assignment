@@ -120,7 +120,7 @@ def test_optional_profile_fetch_failure_does_not_mark_enrichment_error(tmp_path:
     from daily_movers.providers import yahoo_ticker
 
     def fake_price_series(symbol, *, client, logger):
-        return [1.0, 2.0, 3.0]
+        return [1.0, 2.0, 3.0], 100.0, 101.0
 
     def fake_headlines(symbol, *, client, logger, top_n=3):
         return [Headline(title="h1", url="https://example.com/1")]

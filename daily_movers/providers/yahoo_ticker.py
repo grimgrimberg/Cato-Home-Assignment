@@ -1,8 +1,21 @@
 from __future__ import annotations
 
+"""Per-ticker enrichment from Yahoo.
+
+Given a single TickerRow, we attempt to fetch supporting evidence used by the
+analysis layer:
+- price series (chart endpoint)
+- headlines (RSS)
+- optional profile fields (sector/industry/earnings)
+
+This is best-effort enrichment: failures are captured as ErrorInfo and the run
+continues with partial data.
+"""
+
 import re
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote
 
 from daily_movers.errors import EnrichmentError, HTTPFetchError
 from daily_movers.models import Enrichment, ErrorInfo, Headline, TickerRow
@@ -27,9 +40,15 @@ def enrich_ticker(
     industry: str | None = None
     earnings_date: str | None = None
     price_series: list[float] = []
+    open_price: float | None = None
+    close_price: float | None = None
 
     try:
-        price_series = fetch_price_series(row.ticker, client=client, logger=logger)
+        price_series, open_price, close_price = fetch_price_series(
+            row.ticker,
+            client=client,
+            logger=logger,
+        )
     except EnrichmentError as exc:
         errors.append(
             ErrorInfo(
@@ -72,6 +91,8 @@ def enrich_ticker(
         earnings_date=earnings_date,
         headlines=headlines,
         price_series=price_series,
+        open_price=open_price,
+        close_price=close_price,
         errors=errors,
     )
 
@@ -81,8 +102,9 @@ def fetch_price_series(
     *,
     client: HttpClient,
     logger: StructuredLogger,
-) -> list[float]:
-    url = CHART_URL_TEMPLATE.format(symbol=symbol)
+) -> tuple[list[float], float | None, float | None]:
+    safe_symbol = quote(symbol, safe="")
+    url = CHART_URL_TEMPLATE.format(symbol=safe_symbol)
     try:
         payload = client.get_json(
             url,
@@ -97,9 +119,12 @@ def fetch_price_series(
                 stage="enrichment",
                 url=url,
             )
-        quote = (((result.get("indicators") or {}).get("quote") or [None])[0]) or {}
-        closes = [float(v) for v in (quote.get("close") or []) if isinstance(v, (int, float))]
-        return closes[-15:]
+        quote_data = (((result.get("indicators") or {}).get("quote") or [None])[0]) or {}
+        opens = [float(v) for v in (quote_data.get("open") or []) if isinstance(v, (int, float))]
+        closes = [float(v) for v in (quote_data.get("close") or []) if isinstance(v, (int, float))]
+        open_price = opens[-1] if opens else None
+        close_price = closes[-1] if closes else None
+        return closes[-15:], open_price, close_price
     except (HTTPFetchError, KeyError, IndexError, TypeError, ValueError, EnrichmentError) as exc:
         if isinstance(exc, EnrichmentError):
             raise
@@ -113,7 +138,8 @@ def fetch_headlines(
     logger: StructuredLogger,
     top_n: int = 3,
 ) -> list[Headline]:
-    url = RSS_TEMPLATE.format(symbol=symbol)
+    safe_symbol = quote(symbol, safe="")
+    url = RSS_TEMPLATE.format(symbol=safe_symbol)
     try:
         xml_text = client.get_text(url, stage="enrichment", logger=logger)
         root = ET.fromstring(xml_text)
@@ -142,7 +168,8 @@ def fetch_quote_profile_fields(
     client: HttpClient,
     logger: StructuredLogger,
 ) -> tuple[str | None, str | None, str | None]:
-    url = QUOTE_HTML_TEMPLATE.format(symbol=symbol)
+    safe_symbol = quote(symbol, safe="")
+    url = QUOTE_HTML_TEMPLATE.format(symbol=safe_symbol)
     try:
         html = client.get_text(url, stage="enrichment", logger=logger)
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from daily_movers.models import ReportRow
 
@@ -13,6 +14,8 @@ _HEADERS = [
     "Ticker",
     "Name",
     "Market",
+    "Open",
+    "Close",
     "Price",
     "Abs Change",
     "% Change",
@@ -33,6 +36,9 @@ _HEADERS = [
     "Headline URL",
     "Trend (ASCII Sparkline)",
     "Decision Trace",
+    "Rules Triggered",
+    "Evidence Titles",
+    "Numeric Signals",
     "Provenance URLs",
     "Model Used",
     "Errors",
@@ -40,6 +46,12 @@ _HEADERS = [
 
 
 def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
+    """Write an Excel report for a run.
+
+    - One row per ticker, with flattened enrichment + analysis fields.
+    - Adds hyperlinks to Yahoo quote pages and (when safe) to the top headline.
+    - Includes a Highlights sheet with "Top Pick" and "Most Potential".
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Movers"
@@ -66,6 +78,8 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
             flat.get("ticker"),
             flat.get("name"),
             market,
+            flat.get("open_price"),
+            flat.get("close_price"),
             flat.get("price"),
             flat.get("abs_change"),
             flat.get("pct_change"),
@@ -86,6 +100,9 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
             top_headline_url,
             trend_ascii,
             flat.get("decision_trace"),
+            flat.get("rules_triggered"),
+            flat.get("evidence_titles"),
+            flat.get("numeric_signals"),
             flat.get("provenance_urls"),
             report_row.analysis.model_used,
             flat.get("errors"),
@@ -93,21 +110,25 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
 
         ws.append(values)
 
-        ticker_cell = ws.cell(row=row_idx, column=1)
+        ticker_col = _HEADERS.index("Ticker") + 1
+        ticker_cell = ws.cell(row=row_idx, column=ticker_col)
         ticker_cell.hyperlink = quote_url
         ticker_cell.style = "Hyperlink"
 
-        headline_url_cell = ws.cell(row=row_idx, column=21)
-        if top_headline_url:
+        headline_url_col = _HEADERS.index("Headline URL") + 1
+        headline_url_cell = ws.cell(row=row_idx, column=headline_url_col)
+        if top_headline_url and _is_safe_url(str(top_headline_url)):
             headline_url_cell.hyperlink = str(top_headline_url)
             headline_url_cell.style = "Hyperlink"
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:Z{max(2, len(rows) + 1)}"
+    last_col = get_column_letter(len(_HEADERS))
+    ws.auto_filter.ref = f"A1:{last_col}{max(2, len(rows) + 1)}"
 
     # % Change column conditional formatting (column F now).
+    pct_col = get_column_letter(_HEADERS.index("% Change") + 1)
     ws.conditional_formatting.add(
-        f"F2:F{max(2, len(rows) + 1)}",
+        f"{pct_col}2:{pct_col}{max(2, len(rows) + 1)}",
         ColorScaleRule(
             start_type="num",
             start_value=-10,
@@ -122,8 +143,9 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
     )
 
     # Confidence column conditional formatting (column N now).
+    conf_col = get_column_letter(_HEADERS.index("Confidence") + 1)
     ws.conditional_formatting.add(
-        f"N2:N{max(2, len(rows) + 1)}",
+        f"{conf_col}2:{conf_col}{max(2, len(rows) + 1)}",
         ColorScaleRule(
             start_type="num",
             start_value=0,
@@ -137,36 +159,43 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
         ),
     )
 
-    widths = {
-        "A": 12,
-        "B": 28,
-        "C": 10,
-        "D": 12,
-        "E": 12,
-        "F": 12,
-        "G": 14,
-        "H": 10,
-        "I": 12,
-        "J": 18,
-        "K": 22,
-        "L": 14,
-        "M": 10,
-        "N": 11,
-        "O": 10,
-        "P": 13,
-        "Q": 26,
-        "R": 28,
-        "S": 48,
-        "T": 40,
-        "U": 40,
-        "V": 22,
-        "W": 48,
-        "X": 48,
-        "Y": 18,
-        "Z": 48,
+    widths_by_header = {
+        "Ticker": 12,
+        "Name": 28,
+        "Market": 10,
+        "Open": 12,
+        "Close": 12,
+        "Price": 12,
+        "Abs Change": 12,
+        "% Change": 12,
+        "Volume": 14,
+        "Currency": 10,
+        "Exchange": 12,
+        "Sector": 18,
+        "Industry": 22,
+        "Earnings Date": 14,
+        "Action": 10,
+        "Confidence": 11,
+        "Sentiment": 10,
+        "Needs Review": 13,
+        "Needs Review Reason": 26,
+        "Recommendation Tags": 28,
+        "Why It Moved": 48,
+        "Top Headline": 40,
+        "Headline URL": 40,
+        "Trend (ASCII Sparkline)": 22,
+        "Decision Trace": 48,
+        "Rules Triggered": 32,
+        "Evidence Titles": 48,
+        "Numeric Signals": 48,
+        "Provenance URLs": 48,
+        "Model Used": 18,
+        "Errors": 48,
     }
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
+    for idx, header in enumerate(_HEADERS, start=1):
+        width = widths_by_header.get(header)
+        if width:
+            ws.column_dimensions[get_column_letter(idx)].width = width
 
     # --- Highlights sheet ---
     hl_ws = wb.create_sheet(title="Highlights")
@@ -249,6 +278,11 @@ def write_excel_report(*, rows: list[ReportRow], out_path: Path) -> None:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
+
+
+def _is_safe_url(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith("http://") or lowered.startswith("https://")
 
 
 def _ascii_sparkline(values: list[float]) -> str:

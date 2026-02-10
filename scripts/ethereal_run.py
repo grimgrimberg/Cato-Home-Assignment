@@ -35,34 +35,37 @@ def _read_ethereal_smtp_row(path: Path) -> dict[str, str]:
 
 
 def main() -> int:
-    creds_path = WORKSPACE_ROOT / "credentials.csv"
-
-    smtp_row = _read_ethereal_smtp_row(creds_path)
-
-    host = smtp_row.get("Hostname")
-    port_text = smtp_row.get("Port")
-    username = smtp_row.get("Username")
-    password = smtp_row.get("Password")
-
-    if not host or not port_text or not username or not password:
-        raise ValueError("credentials.csv SMTP row is missing Hostname/Port/Username/Password")
-
-    try:
-        port = int(port_text)
-    except ValueError as exc:
-        raise ValueError(f"Invalid SMTP port in credentials.csv: {port_text}") from exc
-
+    # Prefer SMTP config from .env (or environment variables). Only fall back
+    # to credentials.csv if SMTP isn't configured.
     cfg = load_config(env_file=str(WORKSPACE_ROOT / ".env"))
-    cfg = cfg.model_copy(
-        update={
-            "smtp_host": host,
-            "smtp_port": port,
-            "smtp_username": username,
-            "smtp_password": password,
-            "from_email": username,
-            "self_email": username,
-        }
-    )
+
+    if not cfg.smtp_ready:
+        creds_path = WORKSPACE_ROOT / "credentials.csv"
+        smtp_row = _read_ethereal_smtp_row(creds_path)
+
+        host = smtp_row.get("Hostname")
+        port_text = smtp_row.get("Port")
+        username = smtp_row.get("Username")
+        password = smtp_row.get("Password")
+
+        if not host or not port_text or not username or not password:
+            raise ValueError("credentials.csv SMTP row is missing Hostname/Port/Username/Password")
+
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise ValueError(f"Invalid SMTP port in credentials.csv: {port_text}") from exc
+
+        cfg = cfg.model_copy(
+            update={
+                "smtp_host": host,
+                "smtp_port": port,
+                "smtp_username": username,
+                "smtp_password": password,
+                "from_email": username,
+                "self_email": username,
+            }
+        )
 
     out_dir = WORKSPACE_ROOT / "runs" / f"ethereal-{_utc_stamp()}"
 

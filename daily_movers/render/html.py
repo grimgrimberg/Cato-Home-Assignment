@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import html
+from urllib.parse import quote, urlparse
 from typing import Any
 
 from daily_movers.models import ReportRow
 
 
 def build_digest_html(*, rows: list[ReportRow], run_meta: dict[str, Any]) -> str:
+    """Build the standalone HTML digest for a run.
+
+    Security posture:
+    - All user-/upstream-provided strings are escaped before embedding in HTML.
+    - Outbound links are restricted to safe schemes (http/https) where applicable.
+    """
     gainers = sorted(
         rows,
         key=lambda r: r.ticker.pct_change if r.ticker.pct_change is not None else -9999,
@@ -677,6 +684,8 @@ def build_digest_html(*, rows: list[ReportRow], run_meta: dict[str, Any]) -> str
             <th data-type="text">Market</th>
             <th data-type="number">% Change</th>
             <th data-type="number">Price</th>
+            <th data-type="number">Open</th>
+            <th data-type="number">Close</th>
             <th data-type="number">Volume</th>
             <th data-type="text">Action</th>
             <th data-type="number">Confidence</th>
@@ -824,11 +833,21 @@ def _build_card(row: ReportRow, *, positive: bool) -> str:
 def _build_table_row(row: ReportRow, idx: int) -> str:
     flat = row.to_flat_dict()
 
-    ticker = html.escape(str(flat.get("ticker") or ""))
+    ticker_raw = str(flat.get("ticker") or "")
+    ticker = html.escape(ticker_raw)
+    ticker_url = f"https://finance.yahoo.com/quote/{quote(ticker_raw, safe='')}"
     company = html.escape(str(flat.get("name") or "Unknown"))
     pct = float(flat.get("pct_change") or 0.0)
-    price = float(flat.get("price") or 0.0)
+    price_val = _to_float(flat.get("price"))
+    open_val = _to_float(flat.get("open_price"))
+    close_val = _to_float(flat.get("close_price"))
+    price_sort = price_val if price_val is not None else -999999
+    open_sort = open_val if open_val is not None else -999999
+    close_sort = close_val if close_val is not None else -999999
     volume = float(flat.get("volume") or 0.0)
+    price_display = _fmt_price(price_val)
+    open_display = _fmt_price(open_val)
+    close_display = _fmt_price(close_val)
     action = html.escape(str(flat.get("action") or "WATCH"))
     confidence = float(flat.get("confidence") or 0.0)
     why = html.escape(str(flat.get("why_it_moved") or ""))
@@ -860,9 +879,9 @@ def _build_table_row(row: ReportRow, idx: int) -> str:
         rule_items = "<li>No explicit rules</li>"
 
     headline_items = "".join(
-        f"<li><a href='{html.escape(h.url)}' target='_blank' rel='noopener noreferrer'>{html.escape(h.title)}</a></li>"
+        _build_headline_item(h.title, h.url)
         for h in row.analysis.decision_trace.evidence_used[:3]
-        if h.url
+        if h.title
     )
     if not headline_items:
         headline_items = "<li>No evidence headlines</li>"
@@ -872,12 +891,14 @@ def _build_table_row(row: ReportRow, idx: int) -> str:
     return f"""
 <tr data-action="{action}" data-review="{review_value}" data-row="{idx}">
   <td data-sort="{ticker}">
-    <a class="symbol-link mono" href="https://finance.yahoo.com/quote/{ticker}" target="_blank" rel="noopener noreferrer">{ticker}</a>
+    <a class="symbol-link mono" href="{ticker_url}" target="_blank" rel="noopener noreferrer">{ticker}</a>
     <div class="company-name">{company}</div>
   </td>
   <td data-sort="{market_label}">{market_badge_html}</td>
   <td data-sort="{pct:.6f}" class="mono">{pct:+.2f}%</td>
-  <td data-sort="{price:.6f}" class="mono">{price:.2f}</td>
+  <td data-sort="{price_sort:.6f}" class="mono">{price_display}</td>
+  <td data-sort="{open_sort:.6f}" class="mono">{open_display}</td>
+  <td data-sort="{close_sort:.6f}" class="mono">{close_display}</td>
   <td data-sort="{volume:.6f}" class="mono">{volume:,.0f}</td>
   <td data-sort="{action}"><span class="pill {action_cls}">{action}</span></td>
   <td data-sort="{confidence:.6f}" class="confidence {confidence_cls}">{confidence:.2f}</td>
@@ -1033,6 +1054,38 @@ def _build_highlight_section(
         )
 
     return f"<section class='highlight-section'>{''.join(cards)}</section>"
+
+
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _fmt_price(value: float | None) -> str:
+    if value is None:
+        return "--"
+    return f"{value:.2f}"
+
+
+def _safe_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value.strip())
+    if parsed.scheme in {"http", "https"}:
+        return value.strip()
+    return None
+
+
+def _build_headline_item(title: str, url: str | None) -> str:
+    safe_url = _safe_url(url)
+    safe_title = html.escape(title or "")
+    if safe_url:
+        return (
+            f"<li><a href='{html.escape(safe_url)}' target='_blank' "
+            f"rel='noopener noreferrer'>{safe_title}</a></li>"
+        )
+    return f"<li>{safe_title}</li>"
 
 
 def _tag_style(tag: str) -> str:

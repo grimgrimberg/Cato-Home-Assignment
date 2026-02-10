@@ -1,8 +1,23 @@
+ 
 from __future__ import annotations
+
+"""Raw OpenAI fallback (no LangChain / LangGraph).
+
+This module is used when the agentic LangGraph path fails and an API key is
+available. It calls the OpenAI Responses API directly via requests.
+
+Important behavior:
+- Prompts request **strict JSON only**.
+- Output is normalized/validated so downstream rendering is stable.
+- Retries are limited and logged; failures fall back to heuristics in the
+    orchestrator.
+"""
 
 import json
 import math
+import random
 import re
+import time
 from typing import Any
 
 import requests
@@ -14,6 +29,11 @@ from daily_movers.storage.runs import StructuredLogger
 
 
 class OpenAIAnalyzer:
+    """Calls OpenAI to synthesize an Analysis object.
+
+    This is intentionally small and dependency-light: it avoids LangChain so the
+    rest of the pipeline still works in minimal environments.
+    """
     def __init__(self, *, config: AppConfig, logger: StructuredLogger) -> None:
         self.config = config
         self.logger = logger
@@ -23,6 +43,13 @@ class OpenAIAnalyzer:
         return self.config.openai_enabled
 
     def synthesize(self, *, row: TickerRow, enrichment: Enrichment) -> Analysis:
+        """Call the OpenAI Responses endpoint and return a validated Analysis.
+
+        Notes:
+        - Requires OPENAI_API_KEY (see AppConfig.openai_enabled).
+        - Uses OPENAI_BASE_URL + '/responses'. In production this should be HTTPS.
+        - Any non-JSON or malformed fields are normalized/clamped.
+        """
         if not self.enabled:
             raise AnalysisError("OPENAI_API_KEY is not configured", stage="analysis", url=None)
 
@@ -71,8 +98,9 @@ class OpenAIAnalyzer:
             "Content-Type": "application/json",
         }
 
+        max_attempts = 2
         last_error: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(max_attempts):
             try:
                 response = requests.post(
                     url,
@@ -80,8 +108,22 @@ class OpenAIAnalyzer:
                     json=payload,
                     timeout=self.config.openai_timeout_seconds,
                 )
-                if response.status_code >= 400:
+                status_code = response.status_code
+                if status_code >= 400:
                     safe_error = _safe_openai_error(response)
+                    retryable = status_code in {408, 429, 500, 502, 503, 504}
+                    if retryable and attempt < max_attempts - 1:
+                        self.logger.warning(
+                            "openai_synthesis_retry",
+                            stage="analysis",
+                            symbol=row.ticker,
+                            error_type="OpenAIHttpError",
+                            error_message=safe_error,
+                            retries=attempt,
+                            url=url,
+                        )
+                        _sleep_backoff(attempt=attempt + 1, response=response)
+                        continue
                     raise AnalysisError(
                         safe_error,
                         stage="analysis",
@@ -107,8 +149,9 @@ class OpenAIAnalyzer:
                 return analysis
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                is_last = attempt == max_attempts - 1
                 self.logger.warning(
-                    "openai_synthesis_retry" if attempt == 0 else "openai_synthesis_failed",
+                    "openai_synthesis_retry" if not is_last else "openai_synthesis_failed",
                     stage="analysis",
                     symbol=row.ticker,
                     error_type=exc.__class__.__name__,
@@ -116,6 +159,8 @@ class OpenAIAnalyzer:
                     retries=attempt,
                     url=url,
                 )
+                if not is_last:
+                    _sleep_backoff(attempt=attempt + 1, response=None)
 
         message = str(last_error) if last_error else "unknown synthesis failure"
         raise AnalysisError(message, stage="analysis", url=url)
@@ -343,6 +388,8 @@ def _coerce_numeric_signals(
 ) -> dict[str, Any]:
     base: dict[str, Any] = {
         "price": row.price,
+        "open_price": enrichment.open_price,
+        "close_price": enrichment.close_price,
         "abs_change": row.abs_change,
         "pct_change": row.pct_change,
         "volume": row.volume,
@@ -435,3 +482,24 @@ def _safe_openai_error(response: requests.Response) -> str:
     if "insufficient_quota" in message:
         return "OpenAI request failed due to insufficient quota"
     return f"OpenAI API returned HTTP {code}"
+
+
+def _sleep_backoff(*, attempt: int, response: requests.Response | None) -> None:
+    delay = min(6.0, 0.5 * (2 ** (attempt - 1)) + random.uniform(0, 0.5))
+    retry_after = _parse_retry_after(response)
+    if retry_after is not None:
+        delay = max(delay, retry_after)
+    time.sleep(delay)
+
+
+def _parse_retry_after(response: requests.Response | None) -> float | None:
+    if response is None:
+        return None
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return float(value)
+    except ValueError:
+        return None

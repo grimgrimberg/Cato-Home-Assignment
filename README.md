@@ -1,61 +1,236 @@
 # Daily Movers Assistant
 
-A Python market-digest pipeline that ingests Yahoo Finance data, enriches tickers with evidence, synthesizes explainable recommendations via a **LangGraph agentic engine** (with deterministic fallbacks), and produces demo-quality HTML + Excel + Email reports.
+Fetches market movers from Yahoo Finance, enriches each ticker with evidence (headlines + price series), runs an “agentic” analysis (LangGraph if available, otherwise deterministic fallbacks), and renders a digest as HTML + Excel + EML (optionally SMTP).
+**Cross-platform:** Works identically on Windows, macOS, and Linux.  
+**Plug-and-play:** No API keys required for basic runs (LLM and email are optional).
+If you only want to run it: follow **Quickstart** and ignore the rest.
 
 ---
 
-## Table of Contents
+## Quickstart (2 minutes)
 
-- [Quick Start](#quick-start)
-- [What the Project Does](#what-the-project-does)
-- [Architecture Diagram](#architecture-diagram)
-- [Agentic Architecture (LangGraph)](#agentic-architecture-langgraph)
-- [Modes: movers vs watchlist](#modes-movers-vs-watchlist)
-- [Ingestion Details (Yahoo)](#ingestion-details-yahoo-and---source)
-- [Watchlist File Format](#watchlist-file-format-yamljson)
-- [Enrichment](#enrichment-best-effort)
-- [Analysis Architecture](#analysis-architecture)
-- [HITL Review Rules](#hitl-human-in-the-loop-review-rules)
-- [Output Artifacts](#output-artifacts-per-run-folder)
-- [Email & SMTP Setup](#email--smtp-setup)
-- [Configuration & Environment Variables](#configuration--environment-variables)
-- [CLI Reference](#cli-reference-every-flag)
-- [UiPath Integration](#uipath-integration-function-call-adapter)
-- [Testing](#testing--hardening)
-- [Debugging & Troubleshooting](#debugging--troubleshooting)
-- [High-Value Notes](#high-value-notes-stuff-people-usually-miss)
-- [Project Layout](#project-layout)
+### 1) Create a venv + install deps
 
----
-
-## Quick Start
-
-### Install
-
-```powershell
-py -3 -m pip install -r requirements.txt -r requirements-dev.txt
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### Run (opens digest.html automatically)
-
+**Windows (PowerShell):**
 ```powershell
-py -3 -m daily_movers run --mode movers --region us --top 5 --out runs/quick-test
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### Run tests
-
-```powershell
-py -3 -m pytest -q
+**Windows (cmd):**
+```cmd
+python -m venv .venv
+.\.venv\Scripts\activate.bat
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### Convenience runner (Windows)
+### 2) Run a small demo (auto-opens the HTML digest)
 
+```bash
+python -m daily_movers run --mode movers --region us --top 5 --out runs/quick-test
+```
+
+**What `python -m daily_movers` means:**  
+Runs Python and executes the `daily_movers` package as a module. This is the standard cross-platform way to run Python packages.
+
+If you prefer running the CLI file directly:
+
+**macOS / Linux:**
+```bash
+python daily_movers/cli.py run --mode movers --region us --top 5 --out runs/quick-test
+```
+
+**Windows:**
+```powershell
+python .\daily_movers\cli.py run --mode movers --region us --top 5 --out runs/quick-test
+```
+
+### 3) Run tests
+
+```bash
+python -m pytest -q
+```
+
+### 4) (Optional) Use helper scripts
+
+**Windows (PowerShell):**
 ```powershell
 .\scripts\tasks.ps1 help
 .\scripts\tasks.ps1 install
 .\scripts\tasks.ps1 test
 .\scripts\tasks.ps1 run-movers -Date 2026-02-09 -Top 20 -Region us -Out runs/2026-02-09
 ```
+
+**macOS / Linux (bash):**
+```bash
+bash scripts/quickstart.sh  # Quick setup + demo run
+bash scripts/demo.sh        # Alternative demo script
+python scripts/ethereal_run.py  # Ethereal SMTP demo
+```
+
+---
+
+## What happens when you run it
+
+The CLI is just a wrapper around one orchestrator function:
+
+- **Ingest**: get a list of tickers (US “Most Active” screener or a regional universe or a watchlist file).
+- **Enrich**: fetch per-ticker evidence (headlines RSS, quote page fields, price series).
+- **Analyze** (per ticker):
+  - baseline: deterministic heuristics (always available)
+  - primary: LangGraph agent (uses OpenAI if configured; otherwise internal heuristics)
+  - fallback: raw OpenAI call (only if LangGraph failed and key exists)
+- **Critic + HITL rules**: normalize outputs + flag “needs review”.
+- **Render**: write `digest.html`, `report.xlsx`, `digest.eml`, `archive.jsonl`, `run.json`, `run.log`.
+
+Outputs live under `runs/<date-or-out>`.
+
+---
+
+## Configuration (optional)
+
+Config is loaded from environment variables, and `.env` is auto-loaded (if present). See `daily_movers/config.py`.
+
+Common env vars:
+
+| Variable | What it does | When you need it |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | Enables OpenAI-backed analysis | Only if you want LLM analysis |
+| `OPENAI_BASE_URL` | OpenAI API base URL (default `https://api.openai.com/v1`) | Only for custom endpoints |
+| `ANALYSIS_MODEL` | Model name (default `gpt-4o-mini`) | Optional |
+| `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `FROM_EMAIL`, `SELF_EMAIL` | Enables SMTP sending (`--send-email`) | Only if you want email delivery |
+| `CACHE_DIR`, `CACHE_TTL_SECONDS` | HTTP cache settings | Optional |
+| `MAX_WORKERS`, `MAX_REQUESTS_PER_HOST` | Concurrency controls | Optional |
+| `LOG_LEVEL` | `INFO`/`WARNING`/`ERROR` | Optional |
+
+Minimal `.env` example (LLM + email):
+
+```env
+OPENAI_API_KEY=...
+SMTP_HOST=smtp.gmail.com
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+FROM_EMAIL=me@example.com
+SELF_EMAIL=me@example.com
+```
+
+### Ethereal demo (SMTP)
+
+If you’re using Ethereal for testing, set these in your `.env` (values come
+from your Ethereal inbox page):
+
+```env
+SMTP_HOST=smtp.ethereal.email
+SMTP_PORT=587
+SMTP_USERNAME=your_ethereal_user
+SMTP_PASSWORD=your_ethereal_password
+FROM_EMAIL=your_ethereal_user
+SELF_EMAIL=your_ethereal_user
+```
+
+The helper script [scripts/ethereal_run.py](scripts/ethereal_run.py) uses the
+`.env` values first. If SMTP isn’t configured there, it will fall back to
+`credentials.csv` (if present).
+
+---
+
+## Repo tour (the parts that matter)
+
+If you’re trying to understand the codebase, start here:
+
+- `daily_movers/cli.py` — CLI flags, builds a `RunRequest`, calls the orchestrator.
+- `daily_movers/pipeline/orchestrator.py` — the main “do the whole run” function.
+- `daily_movers/providers/yahoo_movers.py` — ingestion (movers list / watchlist list).
+- `daily_movers/providers/yahoo_ticker.py` — per-ticker enrichment (RSS/quote/chart).
+- `daily_movers/pipeline/agent.py` — LangGraph agent (research → analyst → critic → recommender).
+- `daily_movers/pipeline/llm.py` — raw OpenAI Responses API fallback + strict JSON normalization.
+- `daily_movers/pipeline/heuristics.py` — deterministic analysis when LLMs aren’t available.
+- `daily_movers/pipeline/critic.py` — guardrails (two sentences, no chain-of-thought language, etc.).
+- `daily_movers/render/html.py` + `daily_movers/render/excel.py` — output reports.
+- `daily_movers/email/*` — always writes `digest.eml`, optionally sends via SMTP.
+- `daily_movers/storage/cache.py` + `daily_movers/storage/runs.py` — HTTP caching + structured JSONL logs.
+
+### Understanding the code
+
+**Data flow:**
+1. `cli.py` → `orchestrator.py` (the main function)
+2. Ingestion: `yahoo_movers.py` fetches ticker list
+3. Per-ticker loop (parallel): `yahoo_ticker.py` enriches → `agent.py`/`llm.py`/`heuristics.py` analyze → `critic.py` validates
+4. Render: `html.py` + `excel.py` + `email/*` generate outputs
+5. Write artifacts to `runs/<date>/`
+
+**Key patterns:**
+- Every module has a docstring explaining its purpose
+- Errors are captured, not raised (so one bad ticker doesn't crash the run)
+- All models are Pydantic (see `models.py` for the full schema)
+- HTTP requests are cached + retried automatically (`storage/cache.py`)
+
+---
+
+## Common commands
+
+All commands work identically on macOS, Linux, and Windows.
+
+Movers (US most-active):
+
+```bash
+python -m daily_movers run --mode movers --region us --source most-active --top 20 --out runs/us-top20
+```
+
+Movers (regional universe ranking):
+
+```ash
+python -m daily_movers run --mode movers --region eu --source universe --top 20 --out runs/eu-top20
+```
+
+Watchlist:
+
+```ash
+python -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 60 --out runs/watchlist
+```
+
+Don’t auto-open the browser:
+
+```ash
+python -m daily_movers run --mode movers --region us --top 5 --no-open
+```
+
+---
+
+## Business Concept
+
+This project automates the daily "market movers" research flow for analysts and executives.
+Instead of manually scanning Yahoo Finance and summarizing news, the pipeline fetches the top movers,
+adds evidence, and produces explainable recommendations in analyst-friendly outputs (HTML, Excel, email).
+
+See `docs/BUSINESS_CONCEPT.md` for the full business framing and stakeholder view.
+
+---
+
+## Technical Overview
+
+The system is a Python CLI pipeline with an agentic analysis core (LangGraph) and deterministic fallbacks.
+It ingests market data, enriches each ticker, runs a multi-node reasoning graph, and renders multiple outputs.
+The design emphasizes explainability, consistent artifacts, and graceful degradation when external services fail.
+
+See `docs/TECHNICAL_OVERVIEW.md` for architecture, reasoning logic, and system boundaries.
+
+---
+
+## Documentation
+
+- `docs/BUSINESS_CONCEPT.md`
+- `docs/TECHNICAL_OVERVIEW.md`
+- `docs/DEPLOYMENT.md`
+- `docs/OBSERVABILITY.md`
 
 ---
 
@@ -182,7 +357,7 @@ Ingestion code: `daily_movers/providers/yahoo_movers.py`
 | Endpoint | Purpose | Fallback |
 |----------|---------|----------|
 | `v1/finance/screener/predefined/saved?scrIds=most_actives` | US most-active movers | → HTML scrape |
-| `finance.yahoo.com/most-active` | HTML fallback for US movers | — |
+| `finance.yahoo.com/markets/stocks/most-active/` | HTML fallback for US movers | — |
 | `v8/finance/chart/{symbol}` | Price history + non-US movers + watchlist | — |
 | `feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}` | Headlines | — |
 | `finance.yahoo.com/quote/{symbol}` | Sector, industry, earnings | — |
@@ -282,6 +457,8 @@ The row includes `needs_review_reason` listing all triggered reasons.
 
 The CLI prints `{status, summary, paths}` JSON to stdout after each run.
 
+Note: The HTML and Excel reports include open and close prices when available.
+
 ---
 
 ## Email & SMTP Setup
@@ -377,6 +554,7 @@ Configuration is a Pydantic model (`AppConfig`) in `daily_movers/config.py`.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MAX_WORKERS` | 5 | Thread pool size for parallel ticker processing |
+| `MAX_REQUESTS_PER_HOST` | 5 | Concurrent HTTP requests allowed per host |
 | `REQUEST_TIMEOUT_SECONDS` | 20 | Yahoo HTTP timeout |
 | `CACHE_DIR` | `.cache/http` | Disk cache location |
 | `CACHE_TTL_SECONDS` | 1800 | Cache freshness window |

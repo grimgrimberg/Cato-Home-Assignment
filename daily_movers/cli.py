@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint.
+
+    Parses args, builds a RunRequest, runs the orchestrator, prints the artifact
+    paths as JSON, and (by default) opens the HTML digest in a browser.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -67,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _open_digest_html(path: str | None) -> None:
+    """Best-effort: open digest.html in the default browser.
+
+    Failure to open is not fatal; the artifact is still written to disk.
+    """
     if not path:
         return
     html_path = Path(path)

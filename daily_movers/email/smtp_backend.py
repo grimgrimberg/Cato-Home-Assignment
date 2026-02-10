@@ -34,7 +34,8 @@ class SmtpBackend:
         try:
             with smtplib.SMTP(host, self.config.smtp_port, timeout=self.config.request_timeout_seconds) as server:
                 server.ehlo()
-                server.starttls()
+                context = ssl.create_default_context()
+                server.starttls(context=context)
                 server.ehlo()
                 server.login(username, password)
                 server.send_message(message)

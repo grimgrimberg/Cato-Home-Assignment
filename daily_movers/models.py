@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+"""Core data models for the pipeline.
+
+Hierarchy:
+- TickerRow: raw ingestion result (symbol + price/volume deltas)
+- Enrichment: per-ticker supporting evidence (headlines, sector, price series)
+- Analysis: synthesized recommendation (action, sentiment, confidence, explanation)
+- ReportRow: combines all of the above + HITL flags
+
+All models use Pydantic for validation and serialization.
+"""
+
 from datetime import datetime, timezone
+import json
 from enum import Enum
 from typing import Any
 
@@ -8,6 +20,10 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class Action(str, Enum):
+    """Recommendation action (BUY/WATCH/SELL).
+    
+    Str subclass so it serializes cleanly to JSON without custom encoders.
+    """
     BUY = "BUY"
     WATCH = "WATCH"
     SELL = "SELL"
@@ -28,6 +44,11 @@ class Headline(BaseModel):
 
 
 class TickerRow(BaseModel):
+    """Raw ingestion output for one ticker.
+    
+    Contains price/volume deltas and metadata. Failures during ingestion are
+    captured in the errors list so the pipeline can continue.
+    """
     ticker: str
     name: str | None = None
     price: float | None = None
@@ -51,11 +72,18 @@ class TickerRow(BaseModel):
 
 
 class Enrichment(BaseModel):
+    """Best-effort evidence gathered per ticker.
+    
+    All fields are optional. Enrichment failures are recorded in errors but
+    don't block the run.
+    """
     sector: str | None = None
     industry: str | None = None
     earnings_date: str | None = None
     headlines: list[Headline] = Field(default_factory=list)
     price_series: list[float] = Field(default_factory=list)
+    open_price: float | None = None
+    close_price: float | None = None
     errors: list[ErrorInfo] = Field(default_factory=list)
 
 
@@ -67,6 +95,11 @@ class DecisionTrace(BaseModel):
 
 
 class Analysis(BaseModel):
+    """Synthesized recommendation for one ticker.
+    
+    Produced by the analysis layer (LangGraph agent → OpenAI fallback → heuristics).
+    Always includes explainability traces and provenance URLs for audit/debugging.
+    """
     why_it_moved: str
     sentiment: float
     action: Action
@@ -92,6 +125,10 @@ class Analysis(BaseModel):
 
 
 class ReportRow(BaseModel):
+    """Complete output for one ticker (ingestion + enrichment + analysis + HITL).
+    
+    This is the final structure that gets rendered into HTML/Excel/JSONL.
+    """
     ticker: TickerRow
     enrichment: Enrichment
     analysis: Analysis
@@ -118,9 +155,19 @@ class ReportRow(BaseModel):
 
     def to_flat_dict(self) -> dict[str, Any]:
         top_headline = self.enrichment.headlines[0] if self.enrichment.headlines else None
+        evidence_titles = "; ".join(
+            h.title for h in self.analysis.decision_trace.evidence_used if h.title
+        )
+        rules_triggered = "; ".join(self.analysis.decision_trace.rules_triggered)
+        numeric_signals = json.dumps(
+            self.analysis.decision_trace.numeric_signals_used,
+            ensure_ascii=True,
+        )
         return {
             "ticker": self.ticker.ticker,
             "name": self.ticker.name,
+            "open_price": self.enrichment.open_price,
+            "close_price": self.enrichment.close_price,
             "price": self.ticker.price,
             "abs_change": self.ticker.abs_change,
             "pct_change": self.ticker.pct_change,
@@ -140,6 +187,9 @@ class ReportRow(BaseModel):
             "headline_url": top_headline.url if top_headline else None,
             "trend_points": self.enrichment.price_series,
             "decision_trace": self.analysis.decision_trace.explainability_summary,
+            "rules_triggered": rules_triggered,
+            "evidence_titles": evidence_titles,
+            "numeric_signals": numeric_signals,
             "provenance_urls": ", ".join(self.analysis.provenance_urls),
             "recommendation_tags": ", ".join(self.recommendation_tags),
             "errors": "; ".join(
@@ -167,6 +217,7 @@ class RunMeta(BaseModel):
     status: str
     summary: dict[str, Any]
     email: dict[str, Any]
+    timings_ms: dict[str, int] = Field(default_factory=dict)
 
 
 def apply_hitl_rules(report: ReportRow) -> ReportRow:

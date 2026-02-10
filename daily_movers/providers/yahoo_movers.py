@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+"""Yahoo Finance ingestion (build the list of tickers to analyze).
+
+This module answers: "what symbols should we run the pipeline on today?"
+
+Two main inputs:
+- movers mode: Yahoo screener (US) or a small curated per-region universe
+- watchlist mode: local YAML/JSON file
+
+Implementation notes:
+- US movers prefer the screener JSON endpoint; if it fails, an HTML table scrape
+    keeps the demo working.
+- Per-symbol failures are recorded on the TickerRow so a run still produces
+    complete output artifacts.
+"""
+
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 from bs4 import BeautifulSoup
@@ -16,8 +33,9 @@ from daily_movers.storage.runs import StructuredLogger
 
 
 US_SCREENER_URL = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
-US_HTML_FALLBACK_URL = "https://finance.yahoo.com/most-active"
+US_HTML_FALLBACK_URL = "https://finance.yahoo.com/markets/stocks/most-active/"
 CHART_URL_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+_TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-^=]{0,18}$")
 
 
 def get_movers(
@@ -123,6 +141,8 @@ def load_watchlist_symbols(path: Path) -> list[str]:
             url=str(path),
         )
 
+    # Normalize symbols to a conservative Yahoo-compatible format. We preserve
+    # order and deduplicate.
     normalized: list[str] = []
     for item in symbols:
         if isinstance(item, str):
@@ -131,7 +151,7 @@ def load_watchlist_symbols(path: Path) -> list[str]:
             symbol = str(item["symbol"]).strip().upper()
         else:
             continue
-        if symbol and symbol not in normalized:
+        if symbol and _TICKER_RE.fullmatch(symbol) and symbol not in normalized:
             normalized.append(symbol)
 
     if not normalized:
@@ -150,6 +170,7 @@ def get_us_movers(
     logger: StructuredLogger,
 ) -> list[TickerRow]:
     try:
+        # Primary: structured screener JSON.
         data = client.get_json(
             US_SCREENER_URL,
             params={
@@ -177,8 +198,19 @@ def get_us_movers(
             error_type=exc.__class__.__name__,
             error_message=str(exc),
             url=US_SCREENER_URL,
+            fallback_used=True,
         )
-        return _get_us_movers_html_fallback(top_n=top_n, client=client, logger=logger)
+        # Fallback: HTML scrape. Less reliable, but better than failing the run.
+        rows = _get_us_movers_html_fallback(top_n=top_n, client=client, logger=logger)
+        logger.info(
+            "ingestion_fallback_succeeded",
+            stage="ingestion",
+            status="ok",
+            url=US_HTML_FALLBACK_URL,
+            fallback_used=True,
+            count=len(rows),
+        )
+        return rows
 
 
 def _parse_screener_quote(raw: dict[str, Any]) -> TickerRow:
@@ -273,19 +305,45 @@ def build_rows_from_symbols(
     client: HttpClient,
     logger: StructuredLogger,
 ) -> list[TickerRow]:
-    rows: list[TickerRow] = []
-    for symbol in symbols:
-        rows.append(
-            _row_from_chart(
+    if not symbols:
+        return []
+
+    max_workers = min(5, len(symbols))
+    rows: list[TickerRow | None] = [None] * len(symbols)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(
+                _row_from_chart,
                 symbol=symbol,
                 source=source,
                 market=market,
                 client=client,
                 logger=logger,
-            )
-        )
-
-    return rows
+            ): idx
+            for idx, symbol in enumerate(symbols)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                rows[idx] = future.result()
+            except Exception as exc:  # noqa: BLE001
+                rows[idx] = TickerRow(
+                    ticker=symbols[idx],
+                    name=symbols[idx],
+                    market=market,
+                    ingestion_source=source,
+                    ingestion_fallback_used=False,
+                    errors=[
+                        ErrorInfo(
+                            stage="ingestion",
+                            error_type=exc.__class__.__name__,
+                            error_message=str(exc),
+                            url=None,
+                            fallback_used=False,
+                        )
+                    ],
+                )
+    return [row for row in rows if row is not None]
 
 
 def _row_from_chart(
@@ -296,7 +354,8 @@ def _row_from_chart(
     client: HttpClient,
     logger: StructuredLogger,
 ) -> TickerRow:
-    url = CHART_URL_TEMPLATE.format(symbol=symbol)
+    safe_symbol = quote(symbol, safe="")
+    url = CHART_URL_TEMPLATE.format(symbol=safe_symbol)
     try:
         payload = client.get_json(
             url,
@@ -312,9 +371,9 @@ def _row_from_chart(
                 url=url,
             )
         meta = result.get("meta") or {}
-        quote = (((result.get("indicators") or {}).get("quote") or [None])[0]) or {}
-        closes = [v for v in (quote.get("close") or []) if isinstance(v, (int, float))]
-        volumes = [v for v in (quote.get("volume") or []) if isinstance(v, (int, float))]
+        quote_data = (((result.get("indicators") or {}).get("quote") or [None])[0]) or {}
+        closes = [v for v in (quote_data.get("close") or []) if isinstance(v, (int, float))]
+        volumes = [v for v in (quote_data.get("volume") or []) if isinstance(v, (int, float))]
 
         price = _as_float(meta.get("regularMarketPrice"))
         if price is None and closes:

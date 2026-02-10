@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daily-movers-assistant"
+version = "0.1.0"
+description = "Daily market movers pipeline with agentic analysis and explainable outputs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.32.0",
+  "pydantic>=2.8.0",
+  "python-dotenv>=1.0.1",
+  "openpyxl>=3.1.5",
+  "tenacity>=9.0.0",
+  "beautifulsoup4>=4.12.3",
+  "PyYAML>=6.0.2",
+  "langgraph>=0.2.0",
+  "langchain>=0.3.0",
+  "langchain-openai>=0.2.0",
+  "langchain-core>=0.3.0",
+]
+
+[project.scripts]
+daily-movers = "daily_movers.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["daily_movers*"]

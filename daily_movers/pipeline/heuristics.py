@@ -50,6 +50,8 @@ def analyze_with_heuristics(*, row: TickerRow, enrichment: Enrichment) -> Analys
         evidence_used=evidence,
         numeric_signals_used={
             "price": price,
+            "open_price": enrichment.open_price,
+            "close_price": enrichment.close_price,
             "abs_change": abs_change,
             "pct_change": pct,
             "volume": volume,

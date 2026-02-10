@@ -324,8 +324,9 @@ With no `OPENAI_API_KEY`, the pipeline still runs and generates all artifacts.
 
 ### Movers mode
 
-```powershell
-py -3 -m daily_movers run --mode movers --region us --source most-active --top 20 --out runs/movers-demo
+
+```bash
+python -m daily_movers run --mode movers --region us --source most-active --top 20 --out runs/movers-demo
 ```
 
 Answers: "Given a market/region, what are the top N tickers worth investigating today?"
@@ -335,8 +336,9 @@ Answers: "Given a market/region, what are the top N tickers worth investigating 
 
 ### Watchlist mode
 
-```powershell
-py -3 -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 60 --out runs/watchlist-demo
+
+```bash
+python -m daily_movers run --mode watchlist --watchlist watchlist.yaml --top 60 --out runs/watchlist-demo
 ```
 
 Answers: "Analyze exactly these symbols."
@@ -497,8 +499,9 @@ The file Ethereal gives you looks like:
 
 **Step 3 — Run the Ethereal helper**
 
-```powershell
-py -3 scripts/ethereal_run.py
+
+```bash
+python scripts/ethereal_run.py
 ```
 
 This will:
@@ -529,8 +532,9 @@ SELF_EMAIL=your_email@gmail.com
 
 Then run with `--send-email`:
 
-```powershell
-py -3 -m daily_movers run --mode movers --region us --top 5 --send-email --out runs/email-test
+
+```bash
+python -m daily_movers run --mode movers --region us --top 5 --send-email --out runs/email-test
 ```
 
 ### Option C: Mailtrap
@@ -634,21 +638,22 @@ Contract:
 
 ## Testing & Hardening
 
-```powershell
-py -3 -m pytest -q
+
+```bash
+python -m pytest -q
 ```
 
 ### High-signal test subsets
 
 | Command | What it covers |
 |---------|---------------|
-| `py -3 -m pytest tests/test_models.py -q` | Pydantic schemas + HITL rules |
-| `py -3 -m pytest tests/test_yahoo_movers_source.py -q` | Ingestion routing + `--source` |
-| `py -3 -m pytest tests/test_uipath_adapter.py -q` | UiPath adapter contract |
-| `py -3 -m pytest tests/test_golden_run.py -q` | Artifact generation |
-| `py -3 -m pytest tests/test_email_backends.py -q` | Email backends + SMTP fallback |
-| `py -3 -m pytest tests/test_llm_normalization.py -q` | OpenAI output normalization |
-| `py -3 -m pytest tests/ralphing_harness.py -q` | Adversarial / failure paths |
+`python -m pytest tests/test_models.py -q` | Pydantic schemas + HITL rules |
+`python -m pytest tests/test_yahoo_movers_source.py -q` | Ingestion routing + `--source` |
+`python -m pytest tests/test_uipath_adapter.py -q` | UiPath adapter contract |
+`python -m pytest tests/test_golden_run.py -q` | Artifact generation |
+`python -m pytest tests/test_email_backends.py -q` | Email backends + SMTP fallback |
+`python -m pytest tests/test_llm_normalization.py -q` | OpenAI output normalization |
+`python -m pytest tests/ralphing_harness.py -q` | Adversarial / failure paths |
 
 Note: `sitecustomize.py` sets `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` to prevent third-party pytest plugins from breaking test runs.
 
@@ -667,16 +672,20 @@ The repo includes 4 debug configs in `.vscode/launch.json`:
 
 ### Practical debug recipe
 
-```powershell
+
+```bash
 # 1. Print resolved config
-py -3 -c "from daily_movers.config import load_config; print(load_config().model_dump())"
+python -c "from daily_movers.config import load_config; print(load_config().model_dump())"
 
 # 2. Run a small test
-py -3 -m daily_movers run --mode movers --region us --top 5 --out runs/debug-top5 --no-open
+python -m daily_movers run --mode movers --region us --top 5 --out runs/debug-top5 --no-open
 
-# 3. Inspect metadata and logs
-Get-Content runs/debug-top5/run.json
-Get-Content runs/debug-top5/run.log | Select-Object -Last 30
+# 3. Inspect metadata and logs (Linux/macOS)
+cat runs/debug-top5/run.json
+tail -n 30 runs/debug-top5/run.log
+# On Windows, use:
+# Get-Content runs/debug-top5/run.json
+# Get-Content runs/debug-top5/run.log | Select-Object -Last 30
 ```
 
 ### Common issues
@@ -719,10 +728,16 @@ Get-Content runs/debug-top5/run.log | Select-Object -Last 30
 
 ### Reliability knobs for stable demos
 
-```powershell
-$env:MAX_WORKERS=1
-$env:REQUEST_TIMEOUT_SECONDS=30
-$env:OPENAI_TIMEOUT_SECONDS=60
+
+```bash
+# Linux/macOS
+export MAX_WORKERS=1
+export REQUEST_TIMEOUT_SECONDS=30
+export OPENAI_TIMEOUT_SECONDS=60
+# Windows (PowerShell)
+# $env:MAX_WORKERS=1
+# $env:REQUEST_TIMEOUT_SECONDS=30
+# $env:OPENAI_TIMEOUT_SECONDS=60
 ```
 
 ---

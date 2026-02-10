@@ -1,5 +1,8 @@
 # Daily Movers Assistant
 
+**Python version required:** Python 3.10 or higher
+
+
 Fetches market movers from Yahoo Finance, enriches each ticker with evidence (headlines + price series), runs an “agentic” analysis (LangGraph if available, otherwise deterministic fallbacks), and renders a digest as HTML + Excel + EML (optionally SMTP).
 **Cross-platform:** Works identically on Windows, macOS, and Linux.  
 **Plug-and-play:** No API keys required for basic runs (LLM and email are optional).
